@@ -1,0 +1,44 @@
+# ============================================================
+# PRODUCTION FACE ATTENDANCE SYSTEM - REQUIREMENTS
+# ============================================================
+
+# Core face recognition stack
+opencv-python>=4.8.0
+insightface>=0.7.3
+onnxruntime>=1.15.0
+
+# Database and ORM
+sqlalchemy>=2.0.0
+
+# Vector similarity search
+faiss-cpu>=1.7.0  # Use faiss-gpu for GPU support
+
+# Web framework and async
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-socketio>=5.0.0
+python-engineio>=4.5.0
+websockets>=11.0.0
+
+# Data processing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Configuration and utilities
+pyyaml>=6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Logging and monitoring
+python-json-logger>=2.0.0
+
+# Database drivers
+psycopg2-binary>=2.9.0  # PostgreSQL
+psycopg-binary>=3.1.0  # PostgreSQL async
+
+# Development/testing (optional)
+pytest>=7.0
+pytest-cov>=4.0
+black>=23.0
+flake8>=6.0
+mypy>=1.0

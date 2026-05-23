@@ -1,0 +1,464 @@
+# ============================================================
+# DATABASE SERVICE - Core Data Persistence Layer
+# ============================================================
+# SQLAlchemy-based service for all database operations:
+# - Persons and embeddings
+# - Attendance records
+# - Unknown candidates
+# - Ignored faces
+
+import logging
+import threading
+from typing import Optional, List, Dict
+from datetime import datetime, timedelta
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class DatabaseService:
+    """
+    SQLAlchemy-based database service for face attendance system.
+    
+    Manages:
+    - Person registration and profiles
+    - Face embeddings storage
+    - Attendance records
+    - Unknown candidate enrollment
+    - Ignored face tracking
+    """
+    
+    def __init__(self, session_maker, use_sqlite: bool = True):
+        """
+        Initialize database service.
+        
+        Args:
+            session_maker: SQLAlchemy SessionLocal factory
+            use_sqlite: Use SQLite (False = PostgreSQL)
+        """
+        self.SessionLocal = session_maker
+        self.use_sqlite = use_sqlite
+        self.lock = threading.Lock()
+    
+    # ========== PERSON MANAGEMENT ==========
+    
+    def create_person(self, name: str, employee_id: str = None, 
+                     metadata: dict = None) -> Optional[int]:
+        """Create new registered person."""
+        try:
+            from models.database import Person
+            
+            session = self.SessionLocal()
+            person = Person(
+                name=name,
+                employee_id=employee_id,
+                is_active=True,
+                metadata=self._dict_to_json(metadata or {})
+            )
+            session.add(person)
+            session.commit()
+            person_id = person.person_id
+            session.close()
+            
+            logger.info(f"[DB] Created person: {name} (ID={person_id})")
+            return person_id
+        except Exception as e:
+            logger.error(f"[DB] Failed to create person: {e}")
+            return None
+    
+    def get_person(self, person_id: int):
+        """Get person by ID."""
+        try:
+            from models.database import Person
+            
+            session = self.SessionLocal()
+            person = session.query(Person).filter(Person.person_id == person_id).first()
+            session.close()
+            return person
+        except Exception as e:
+            logger.error(f"[DB] Failed to get person: {e}")
+            return None
+    
+    def get_person_name(self, person_id: int) -> str:
+        """Get person name."""
+        person = self.get_person(person_id)
+        return person.name if person else f"Unknown_{person_id}"
+    
+    def get_all_persons(self) -> List:
+        """Get all registered persons."""
+        try:
+            from models.database import Person
+            
+            session = self.SessionLocal()
+            persons = session.query(Person).filter(Person.is_active == True).all()
+            session.close()
+            return persons
+        except Exception as e:
+            logger.error(f"[DB] Failed to get persons: {e}")
+            return []
+    
+    # ========== EMBEDDINGS MANAGEMENT ==========
+    
+    def save_embedding(self, person_id: int, embedding: np.ndarray,
+                      quality_score: float, source: str = 'manual',
+                      face_hash: str = None) -> Optional[int]:
+        """Save face embedding for person."""
+        try:
+            from models.database import FaceEmbedding, embedding_to_bytes
+            
+            session = self.SessionLocal()
+            emb_record = FaceEmbedding(
+                person_id=person_id,
+                embedding=embedding_to_bytes(embedding),
+                quality_score=quality_score,
+                source=source,
+                face_hash=face_hash,
+            )
+            session.add(emb_record)
+            session.commit()
+            emb_id = emb_record.embedding_id
+            session.close()
+            
+            logger.debug(f"[DB] Saved embedding {emb_id} for person {person_id}")
+            return emb_id
+        except Exception as e:
+            logger.error(f"[DB] Failed to save embedding: {e}")
+            return None
+    
+    def get_embeddings_for_person(self, person_id: int) -> List[np.ndarray]:
+        """Get all embeddings for person."""
+        try:
+            from models.database import FaceEmbedding, bytes_to_embedding
+            
+            session = self.SessionLocal()
+            records = session.query(FaceEmbedding).filter(
+                FaceEmbedding.person_id == person_id
+            ).all()
+            
+            embeddings = []
+            for record in records:
+                emb = bytes_to_embedding(record.embedding)
+                embeddings.append(emb)
+            
+            session.close()
+            return embeddings
+        except Exception as e:
+            logger.error(f"[DB] Failed to get embeddings: {e}")
+            return []
+    
+    def get_average_embedding(self, person_id: int) -> Optional[np.ndarray]:
+        """Get averaged embedding for person."""
+        embeddings = self.get_embeddings_for_person(person_id)
+        if not embeddings:
+            return None
+        
+        avg_emb = np.mean(embeddings, axis=0)
+        norm = np.linalg.norm(avg_emb)
+        if norm > 0:
+            avg_emb = avg_emb / norm
+        return avg_emb
+    
+    # ========== ATTENDANCE MANAGEMENT ==========
+    
+    def create_attendance_record(self, person_id: int, check_in_time: datetime,
+                                check_out_time: datetime = None,
+                                confidence_avg: float = 0.0,
+                                track_duration: int = 0,
+                                device: str = 'webcam',
+                                notes: str = None) -> Optional[int]:
+        """Create attendance record."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            record = AttendanceRecord(
+                person_id=person_id,
+                check_in_time=check_in_time,
+                check_out_time=check_out_time,
+                confidence_avg=confidence_avg,
+                track_duration=track_duration,
+                device=device,
+                notes=notes,
+            )
+            session.add(record)
+            session.commit()
+            record_id = record.record_id
+            session.close()
+            
+            return record_id
+        except Exception as e:
+            logger.error(f"[DB] Failed to create attendance record: {e}")
+            return None
+    
+    def get_latest_checkin(self, person_id: int) -> Optional[datetime]:
+        """Get last check-in time for person."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            record = session.query(AttendanceRecord).filter(
+                AttendanceRecord.person_id == person_id
+            ).order_by(AttendanceRecord.check_in_time.desc()).first()
+            
+            check_in = record.check_in_time if record else None
+            session.close()
+            return check_in
+        except Exception as e:
+            logger.error(f"[DB] Failed to get latest checkin: {e}")
+            return None
+    
+    def get_latest_unchecked_record(self, person_id: int):
+        """Get latest unchecked-out record."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            record = session.query(AttendanceRecord).filter(
+                AttendanceRecord.person_id == person_id,
+                AttendanceRecord.check_out_time == None
+            ).order_by(AttendanceRecord.check_in_time.desc()).first()
+            
+            session.close()
+            return record
+        except Exception as e:
+            logger.error(f"[DB] Failed to get unchecked record: {e}")
+            return None
+    
+    def update_checkout(self, record_id: int, check_out_time: datetime,
+                       duration_seconds: int) -> bool:
+        """Update check-out time."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            record = session.query(AttendanceRecord).filter(
+                AttendanceRecord.record_id == record_id
+            ).first()
+            
+            if record:
+                record.check_out_time = check_out_time
+                record.duration_seconds = duration_seconds
+                session.commit()
+                session.close()
+                return True
+            
+            session.close()
+            return False
+        except Exception as e:
+            logger.error(f"[DB] Failed to update checkout: {e}")
+            return False
+    
+    def get_attendance_by_date(self, date: datetime) -> List:
+        """Get all attendance records for a date."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            start_date = datetime.combine(date.date(), datetime.min.time())
+            end_date = datetime.combine(date.date(), datetime.max.time())
+            
+            records = session.query(AttendanceRecord).filter(
+                AttendanceRecord.check_in_time >= start_date,
+                AttendanceRecord.check_in_time <= end_date
+            ).all()
+            
+            session.close()
+            return records
+        except Exception as e:
+            logger.error(f"[DB] Failed to get attendance by date: {e}")
+            return []
+    
+    def get_attendance_range(self, start_date: datetime, 
+                            end_date: datetime) -> List:
+        """Get attendance records for date range."""
+        try:
+            from models.database import AttendanceRecord
+            
+            session = self.SessionLocal()
+            records = session.query(AttendanceRecord).filter(
+                AttendanceRecord.check_in_time >= start_date,
+                AttendanceRecord.check_in_time <= end_date
+            ).all()
+            
+            session.close()
+            return records
+        except Exception as e:
+            logger.error(f"[DB] Failed to get attendance range: {e}")
+            return []
+    
+    # ========== UNKNOWN CANDIDATES MANAGEMENT ==========
+    
+    def create_unknown_candidate(self, embedding: np.ndarray,
+                                face_image_path: str,
+                                quality_score: float,
+                                embedding_hash: str,
+                                embedding_cluster_id: str) -> Optional[int]:
+        """Create unknown candidate."""
+        try:
+            from models.database import UnknownCandidate, embedding_to_bytes
+            
+            session = self.SessionLocal()
+            candidate = UnknownCandidate(
+                embedding_cluster_id=embedding_cluster_id,
+                best_face_embedding=embedding_to_bytes(embedding),
+                best_face_image_path=face_image_path,
+                best_quality_score=quality_score,
+                seen_count=1,
+                first_seen=datetime.now(),
+                last_seen=datetime.now(),
+                avg_quality=quality_score,
+                collected_embeddings_count=1,
+            )
+            session.add(candidate)
+            session.commit()
+            candidate_id = candidate.candidate_id
+            session.close()
+            
+            return candidate_id
+        except Exception as e:
+            logger.error(f"[DB] Failed to create unknown candidate: {e}")
+            return None
+    
+    def get_unknown_candidate(self, candidate_id: int):
+        """Get unknown candidate."""
+        try:
+            from models.database import UnknownCandidate, bytes_to_embedding
+            
+            session = self.SessionLocal()
+            record = session.query(UnknownCandidate).filter(
+                UnknownCandidate.candidate_id == candidate_id
+            ).first()
+            
+            if record and record.best_face_embedding:
+                # Convert bytes to numpy array
+                record.best_face_embedding = bytes_to_embedding(record.best_face_embedding)
+                if record.avg_embedding:
+                    record.avg_embedding = bytes_to_embedding(record.avg_embedding)
+            
+            session.close()
+            return record
+        except Exception as e:
+            logger.error(f"[DB] Failed to get unknown candidate: {e}")
+            return None
+    
+    def get_all_unknown_candidates(self) -> List:
+        """Get all unknown candidates."""
+        try:
+            from models.database import UnknownCandidate, bytes_to_embedding
+            
+            session = self.SessionLocal()
+            records = session.query(UnknownCandidate).filter(
+                UnknownCandidate.is_merged == False
+            ).all()
+            
+            for record in records:
+                if record.best_face_embedding:
+                    record.best_face_embedding = bytes_to_embedding(record.best_face_embedding)
+                if record.avg_embedding:
+                    record.avg_embedding = bytes_to_embedding(record.avg_embedding)
+            
+            session.close()
+            return records
+        except Exception as e:
+            logger.error(f"[DB] Failed to get unknown candidates: {e}")
+            return []
+    
+    def update_unknown_candidate(self, candidate_id: int, **kwargs) -> bool:
+        """Update unknown candidate fields."""
+        try:
+            from models.database import UnknownCandidate, embedding_to_bytes
+            
+            session = self.SessionLocal()
+            record = session.query(UnknownCandidate).filter(
+                UnknownCandidate.candidate_id == candidate_id
+            ).first()
+            
+            if record:
+                for key, value in kwargs.items():
+                    if key in ['best_face_embedding', 'avg_embedding'] and isinstance(value, np.ndarray):
+                        value = embedding_to_bytes(value)
+                    setattr(record, key, value)
+                
+                record.last_seen = datetime.now()
+                session.commit()
+                session.close()
+                return True
+            
+            session.close()
+            return False
+        except Exception as e:
+            logger.error(f"[DB] Failed to update unknown candidate: {e}")
+            return False
+    
+    def mark_candidate_merged(self, source_id: int, target_id: int) -> bool:
+        """Mark candidate as merged into another."""
+        return self.update_unknown_candidate(
+            source_id,
+            is_merged=True,
+            merged_into_candidate_id=target_id
+        )
+    
+    # ========== IGNORED FACES MANAGEMENT ==========
+    
+    def create_ignored_face(self, embedding_cluster_id: str, reason: str,
+                          expires_at: datetime, embedding: np.ndarray) -> bool:
+        """Create ignored face entry."""
+        try:
+            from models.database import IgnoredFace, embedding_to_bytes
+            
+            session = self.SessionLocal()
+            ignored = IgnoredFace(
+                embedding_cluster_id=embedding_cluster_id,
+                reason=reason,
+                created_at=datetime.now(),
+                expires_at=expires_at,
+                representative_embedding=embedding_to_bytes(embedding),
+            )
+            session.add(ignored)
+            session.commit()
+            session.close()
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Failed to create ignored face: {e}")
+            return False
+    
+    def is_face_ignored(self, candidate_id: int) -> bool:
+        """Check if face is ignored."""
+        try:
+            candidate = self.get_unknown_candidate(candidate_id)
+            if candidate and candidate.ignored_until:
+                return candidate.ignored_until > datetime.now()
+            return False
+        except Exception as e:
+            logger.error(f"[DB] Failed to check ignored face: {e}")
+            return False
+    
+    def remove_ignored_face(self, embedding_cluster_id: str) -> bool:
+        """Remove ignore status."""
+        try:
+            from models.database import IgnoredFace
+            
+            session = self.SessionLocal()
+            session.query(IgnoredFace).filter(
+                IgnoredFace.embedding_cluster_id == embedding_cluster_id
+            ).delete()
+            session.commit()
+            session.close()
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Failed to remove ignored face: {e}")
+            return False
+    
+    # ========== UTILITY METHODS ==========
+    
+    @staticmethod
+    def _dict_to_json(d: dict) -> str:
+        """Convert dict to JSON string."""
+        import json
+        return json.dumps(d)
+    
+    @staticmethod
+    def _json_to_dict(s: str) -> dict:
+        """Convert JSON string to dict."""
+        import json
+        return json.loads(s) if s else {}

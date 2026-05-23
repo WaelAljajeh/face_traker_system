@@ -1,0 +1,197 @@
+# ============================================================
+# PRODUCTION FACE ATTENDANCE SYSTEM - CONFIGURATION
+# ============================================================
+# Complete configuration for all system components
+
+# ============================================================
+# DATABASE CONFIGURATION
+# ============================================================
+database:
+  type: "sqlite"  # Options: "sqlite", "postgresql"
+  path: "./face_attendance.db"
+
+  # PostgreSQL (uncomment for production)
+  # type: "postgresql"
+  # host: "localhost"
+  # port: 5432
+  # database: "face_attendance"
+  # user: "postgres"
+  # password: "${DB_PASSWORD}"
+  # pool_size: 20
+
+# ============================================================
+# INSIGHTFACE CONFIGURATION
+# ============================================================
+insightface:
+  model_name: "buffalo_s"
+  providers:
+    - "CPUExecutionProvider"   # Force CPU (client has no GPU)
+  det_size: [256, 256] 
+  det_threshold: 0.70
+
+# ============================================================
+# CAMERA CONFIGURATION
+# ============================================================
+camera:
+  source: 2
+  width: 640
+  height: 480
+  fps: 15 
+  frame_skip: 1
+  exposure: -5
+  brightness: 0
+  contrast: 0
+  reconnect_attempts: 5
+  reconnect_delay: 2
+
+# ============================================================
+# FACE QUALITY FILTERING
+# ============================================================
+quality_filter:
+  blur_detection: true
+  blur_threshold: 100.0
+  pose_filtering: true
+  max_yaw: 45
+  max_pitch: 35
+  max_roll: 30
+  brightness_filtering: true
+  min_brightness: 30
+  max_brightness: 220
+  min_face_size: 50
+  occlusion_filtering: true
+  max_occlusion_ratio: 0.20
+
+# ============================================================
+# FACE TRACKING (ByteTrack)
+# ============================================================
+tracking:
+  max_age: 30
+  min_frames: 3
+  iou_threshold: 0.5
+  high_conf_threshold: 0.6
+  embedding_buffer_size: 30
+  max_tracks: 100
+
+# ============================================================
+# FACE RECOGNITION
+# ============================================================
+recognition:
+  faiss_index_type: "flat"
+  faiss_metric: "cosine"
+  similarity_threshold: 0.50
+  recognition_threshold: 0.60
+  embedding_buffer_per_track: 10
+  temporal_confidence_weight: 0.6
+
+# ============================================================
+# ENROLLMENT & UNKNOWN CANDIDATES
+# ============================================================
+enrollment:
+  enabled: true
+  unknown_dir: "./unknown_faces"
+  min_quality_for_enrollment: 0.70
+  enrollment_threshold: 0.65
+  merge_threshold: 0.75
+  min_samples_for_enrollment: 5
+  min_avg_quality_for_enrollment: 0.75
+  ignore_expiry_days: 30
+
+# ============================================================
+# ATTENDANCE CONFIGURATION
+# ============================================================
+attendance:
+  cooldown_minutes: 240
+  mark_checkout_after_minutes: 480
+  duplicate_detection_window: 5
+  auto_checkout_enabled: false
+
+# ============================================================
+# API SERVER CONFIGURATION
+# ============================================================
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  websocket_enabled: true
+  websocket_port: 8001
+  max_connections: 100
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+    - "*"
+  max_request_size: 52428800
+  request_timeout: 30
+
+# ============================================================
+# LOGGING
+# ============================================================
+logging:
+  level: "INFO"
+  format: "json"
+  file: "./logs/attendance.log"
+  max_size: 10485760
+  backup_count: 5
+
+# ============================================================
+# PERFORMANCE OPTIMIZATION
+# ============================================================
+performance:
+  use_gpu: true
+  gpu_device: 0
+  enable_embedding_cache: true
+  cache_size: 1000
+  detector_threads: 2
+  tracker_threads: 1
+  recognition_threads: 2
+  db_threads: 2
+  batch_detection: false
+  batch_size: 4
+  max_memory_mb: 2048
+  garbage_collection_interval: 60
+  inference_every_n_frames: 3   # Only detect every 3rd frame
+  frame_scale: 0.5 
+
+# ============================================================
+# SECURITY
+# ============================================================
+security:
+  api_key_required: false
+  use_https: false
+  rate_limit_enabled: false
+  requests_per_minute: 100
+
+# ============================================================
+# MONITORING & METRICS
+# ============================================================
+monitoring:
+  collect_metrics: true
+  metrics_interval: 60
+  health_check_interval: 30
+  enable_alerts: false
+
+# ============================================================
+# BACKUP & MAINTENANCE
+# ============================================================
+maintenance:
+  backup_enabled: true
+  backup_interval_hours: 24
+  backup_dir: "./backups"
+  backup_max_count: 7
+  vacuum_interval_days: 7
+  cleanup_old_records_days: 90
+
+# ============================================================
+# FEATURE FLAGS
+# ============================================================
+features:
+  passive_enrollment: true
+  ignore_system: true
+  attendance_tracking: true
+  unknown_candidate_merging: true
+  temporal_averaging: true
+  persistence_tracking: true
+  overlay_style: modern
+  target_face_color: [0, 255, 255]
+  matched_face_color: [0, 255, 0]
+  unknown_face_color: [0, 165, 255]
+  low_quality_color: [0, 0, 255]

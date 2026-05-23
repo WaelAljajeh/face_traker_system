@@ -1,0 +1,481 @@
+2026-05-22 20:51:52,397 - __main__ - INFO - ======================================================================
+2026-05-22 20:51:52,398 - __main__ - INFO - FACE ATTENDANCE SYSTEM - PRODUCTION INITIALIZATION
+2026-05-22 20:51:52,399 - __main__ - INFO - ======================================================================
+2026-05-22 20:51:52,493 - __main__ - INFO - Configuration loaded: config.yaml
+2026-05-22 20:51:52,498 - __main__ - INFO - Initializing database...
+2026-05-22 20:51:52,534 - __main__ - ERROR - Fatal error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 264, in main
+    system = FaceAttendanceSystem(args.config)
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 88, in __init__
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 21:08:20,110 - __main__ - INFO - ======================================================================
+2026-05-22 21:08:20,111 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 21:08:20,111 - __main__ - INFO - ======================================================================
+2026-05-22 21:08:20,112 - __main__ - INFO - Loading configuration...
+2026-05-22 21:08:20,578 - __main__ - INFO - Initializing database...
+2026-05-22 21:08:20,606 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 21:08:42,394 - __main__ - INFO - ======================================================================
+2026-05-22 21:08:42,395 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 21:08:42,395 - __main__ - INFO - ======================================================================
+2026-05-22 21:08:42,396 - __main__ - INFO - Loading configuration...
+2026-05-22 21:08:42,937 - __main__ - INFO - Initializing database...
+2026-05-22 21:08:42,966 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 21:12:58,578 - __main__ - INFO - ======================================================================
+2026-05-22 21:12:58,578 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 21:12:58,578 - __main__ - INFO - ======================================================================
+2026-05-22 21:12:58,579 - __main__ - INFO - Loading configuration...
+2026-05-22 21:12:59,174 - __main__ - INFO - Initializing database...
+2026-05-22 21:12:59,212 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:09:20,051 - __main__ - INFO - ======================================================================
+2026-05-22 22:09:20,056 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:09:20,059 - __main__ - INFO - ======================================================================
+2026-05-22 22:09:20,059 - __main__ - INFO - Loading configuration...
+2026-05-22 22:09:21,262 - __main__ - INFO - Initializing database...
+2026-05-22 22:09:21,309 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:31:08,643 - __main__ - INFO - ======================================================================
+2026-05-22 22:31:08,644 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:31:08,644 - __main__ - INFO - ======================================================================
+2026-05-22 22:31:08,645 - __main__ - INFO - Loading configuration...
+2026-05-22 22:31:09,327 - __main__ - INFO - Initializing database...
+2026-05-22 22:31:09,364 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:32:15,511 - __main__ - INFO - ======================================================================
+2026-05-22 22:32:15,512 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:32:15,513 - __main__ - INFO - ======================================================================
+2026-05-22 22:32:15,513 - __main__ - INFO - Loading configuration...
+2026-05-22 22:32:18,487 - __main__ - INFO - Initializing database...
+2026-05-22 22:32:18,523 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:32:28,318 - __main__ - INFO - ======================================================================
+2026-05-22 22:32:28,319 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:32:28,319 - __main__ - INFO - ======================================================================
+2026-05-22 22:32:28,319 - __main__ - INFO - Loading configuration...
+2026-05-22 22:32:28,791 - __main__ - INFO - Initializing database...
+2026-05-22 22:32:28,816 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:39:50,403 - __main__ - INFO - ======================================================================
+2026-05-22 22:39:50,404 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:39:50,404 - __main__ - INFO - ======================================================================
+2026-05-22 22:39:50,404 - __main__ - INFO - Loading configuration...
+2026-05-22 22:39:51,651 - __main__ - INFO - Initializing database...
+2026-05-22 22:39:53,457 - __main__ - ERROR - Error: Attribute name 'metadata' is reserved when using the Declarative API.
+Traceback (most recent call last):
+  File "c:\Users\Laptop Home\Documents\face_attendance\app.py", line 52, in main
+    from models.database import init_database
+  File "c:\Users\Laptop Home\Documents\face_attendance\models\__init__.py", line 2, in <module>
+    from .database import (
+  File "c:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 152, in <module>
+    class Person(Base):
+  File "C:\Users\Laptop Home\Documents\face_attendance\.venv\Lib\site-packages\sqlalchemy\orm\decl_api.py", line 199, in __init__
+    _as_declarative(reg, cls, dict_)
+  File "C:\Users\Laptop Home\Documents\face_attendance\.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py", line 245, in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py", line 326, in setup_mapping
+    return _ClassScanMapperConfig(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py", line 573, in __init__
+    self._extract_mappable_attributes()
+  File "C:\Users\Laptop Home\Documents\face_attendance\.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py", line 1530, in _extract_mappable_attributes
+    raise exc.InvalidRequestError(
+sqlalchemy.exc.InvalidRequestError: Attribute name 'metadata' is reserved when using the Declarative API.
+2026-05-22 22:40:07,747 - __main__ - INFO - ======================================================================
+2026-05-22 22:40:07,748 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:40:07,748 - __main__ - INFO - ======================================================================
+2026-05-22 22:40:07,749 - __main__ - INFO - Loading configuration...
+2026-05-22 22:40:08,245 - __main__ - INFO - Initializing database...
+2026-05-22 22:40:08,274 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:46:09,334 - __main__ - INFO - ======================================================================
+2026-05-22 22:46:09,335 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:46:09,335 - __main__ - INFO - ======================================================================
+2026-05-22 22:46:09,335 - __main__ - INFO - Loading configuration...
+2026-05-22 22:46:09,764 - __main__ - INFO - Initializing database...
+2026-05-22 22:46:09,790 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:50:05,700 - __main__ - INFO - ======================================================================
+2026-05-22 22:50:05,701 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:50:05,702 - __main__ - INFO - ======================================================================
+2026-05-22 22:50:05,702 - __main__ - INFO - Loading configuration...
+2026-05-22 22:50:06,314 - __main__ - INFO - Initializing database...
+2026-05-22 22:50:08,220 - __main__ - ERROR - Error: Attribute name 'metadata' is reserved when using the Declarative API.
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 52, in main
+    from models.database import init_database
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\__init__.py", line 2, in <module>
+    from .database import (
+    ...<10 lines>...
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 152, in <module>
+    class Person(Base):
+    ...<24 lines>...
+            )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_api.py", line 199, in __init__
+    _as_declarative(reg, cls, dict_)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 245, in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 326, in setup_mapping
+    return _ClassScanMapperConfig(
+        registry, cls_, dict_, table, mapper_kw
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 573, in __init__
+    self._extract_mappable_attributes()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 1530, in _extract_mappable_attributes
+    raise exc.InvalidRequestError(
+    ...<2 lines>...
+    )
+sqlalchemy.exc.InvalidRequestError: Attribute name 'metadata' is reserved when using the Declarative API.
+2026-05-22 22:50:32,866 - __main__ - INFO - ======================================================================
+2026-05-22 22:50:32,867 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:50:32,867 - __main__ - INFO - ======================================================================
+2026-05-22 22:50:32,867 - __main__ - INFO - Loading configuration...
+2026-05-22 22:50:33,666 - __main__ - INFO - Initializing database...
+2026-05-22 22:50:33,695 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:51:14,878 - __main__ - INFO - ======================================================================
+2026-05-22 22:51:14,878 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:51:14,879 - __main__ - INFO - ======================================================================
+2026-05-22 22:51:14,879 - __main__ - INFO - Loading configuration...
+2026-05-22 22:51:15,298 - __main__ - INFO - Initializing database...
+2026-05-22 22:51:15,326 - __main__ - ERROR - Error: No module named 'sqlalchemy'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 55, in main
+    engine, SessionLocal = init_database(db_path, echo=False)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 266, in init_database
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+2026-05-22 22:51:17,408 - __main__ - INFO - ======================================================================
+2026-05-22 22:51:17,408 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:51:17,408 - __main__ - INFO - ======================================================================
+2026-05-22 22:51:17,409 - __main__ - INFO - Loading configuration...
+2026-05-22 22:51:17,818 - __main__ - INFO - Initializing database...
+2026-05-22 22:51:18,593 - __main__ - ERROR - Error: Attribute name 'metadata' is reserved when using the Declarative API.
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 52, in main
+    from models.database import init_database
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\__init__.py", line 2, in <module>
+    from .database import (
+    ...<10 lines>...
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 152, in <module>
+    class Person(Base):
+    ...<24 lines>...
+            )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_api.py", line 199, in __init__
+    _as_declarative(reg, cls, dict_)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 245, in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 326, in setup_mapping
+    return _ClassScanMapperConfig(
+        registry, cls_, dict_, table, mapper_kw
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 573, in __init__
+    self._extract_mappable_attributes()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 1530, in _extract_mappable_attributes
+    raise exc.InvalidRequestError(
+    ...<2 lines>...
+    )
+sqlalchemy.exc.InvalidRequestError: Attribute name 'metadata' is reserved when using the Declarative API.
+2026-05-22 22:52:09,885 - __main__ - INFO - ======================================================================
+2026-05-22 22:52:09,885 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:52:09,885 - __main__ - INFO - ======================================================================
+2026-05-22 22:52:09,886 - __main__ - INFO - Loading configuration...
+2026-05-22 22:52:10,298 - __main__ - INFO - Initializing database...
+2026-05-22 22:52:11,057 - __main__ - ERROR - Error: Class <class 'models.database.Person'> does not have a __table__ or __tablename__ specified and does not inherit from an existing table-mapped class.
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 52, in main
+    from models.database import init_database
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\__init__.py", line 2, in <module>
+    from .database import (
+    ...<10 lines>...
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 152, in <module>
+    class Person(Base):
+     """Registered person."""
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_api.py", line 199, in __init__
+    _as_declarative(reg, cls, dict_)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 245, in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 326, in setup_mapping
+    return _ClassScanMapperConfig(
+        registry, cls_, dict_, table, mapper_kw
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 579, in __init__
+    self._setup_inheriting_columns(mapper_kw)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 1839, in _setup_inheriting_columns
+    raise exc.InvalidRequestError(
+    ...<3 lines>...
+    )
+sqlalchemy.exc.InvalidRequestError: Class <class 'models.database.Person'> does not have a __table__ or __tablename__ specified and does not inherit from an existing table-mapped class.
+2026-05-22 22:52:27,167 - __main__ - INFO - ======================================================================
+2026-05-22 22:52:27,168 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:52:27,169 - __main__ - INFO - ======================================================================
+2026-05-22 22:52:27,169 - __main__ - INFO - Loading configuration...
+2026-05-22 22:52:27,623 - __main__ - INFO - Initializing database...
+2026-05-22 22:52:28,396 - __main__ - ERROR - Error: Mapper Mapper[Person(persons)] could not assemble any primary key columns for mapped table 'persons'
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 52, in main
+    from models.database import init_database
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\__init__.py", line 2, in <module>
+    from .database import (
+    ...<10 lines>...
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\models\database.py", line 152, in <module>
+    class Person(Base):
+     """Registered person."""
+     __tablename__ = 'persons'
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_api.py", line 199, in __init__
+    _as_declarative(reg, cls, dict_)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 245, in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 326, in setup_mapping
+    return _ClassScanMapperConfig(
+        registry, cls_, dict_, table, mapper_kw
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 581, in __init__
+    self._early_mapping(mapper_kw)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 367, in _early_mapping
+    self.map(mapper_kw)
+    ~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\decl_base.py", line 1995, in map
+    mapper_cls(self.cls, self.local_table, **self.mapper_args),
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 2, in __init__
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\util\deprecations.py", line 281, in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\mapper.py", line 866, in __init__
+    self._configure_pks()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\sqlalchemy\orm\mapper.py", line 1652, in _configure_pks
+    raise sa_exc.ArgumentError(
+    ...<3 lines>...
+    )
+sqlalchemy.exc.ArgumentError: Mapper Mapper[Person(persons)] could not assemble any primary key columns for mapped table 'persons'
+2026-05-22 22:57:12,312 - __main__ - INFO - ======================================================================
+2026-05-22 22:57:12,313 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:57:12,313 - __main__ - INFO - ======================================================================
+2026-05-22 22:57:12,314 - __main__ - INFO - Loading configuration...
+2026-05-22 22:57:12,784 - __main__ - INFO - Initializing database...
+2026-05-22 22:57:14,253 - __main__ - INFO - Initializing services...
+2026-05-22 22:57:15,904 - fastapi - ERROR - Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+
+2026-05-22 22:57:15,905 - __main__ - ERROR - Error: Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 65, in main
+    api_server = AttendanceAPIServer(
+        config=config._config,
+        db_service=db_service,
+        attendance_service=attendance_service,
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\services\api_server.py", line 70, in __init__
+    self._setup_routes()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\services\api_server.py", line 181, in _setup_routes
+    @self.app.post("/api/enrollment/manual")
+     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 1450, in decorator
+    self.add_api_route(
+    ~~~~~~~~~~~~~~~~~~^
+        path,
+        ^^^^^
+    ...<23 lines>...
+        generate_unique_id_function=generate_unique_id_function,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 1386, in add_api_route
+    route = route_class(
+        self.prefix + path,
+    ...<27 lines>...
+        ),
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 949, in __init__
+    self.dependant = get_dependant(
+                     ~~~~~~~~~~~~~^
+        path=self.path_format, call=self.endpoint, scope="function"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 311, in get_dependant
+    param_details = analyze_param(
+        param_name=param_name,
+    ...<2 lines>...
+        is_path_param=is_path_param,
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 535, in analyze_param
+    ensure_multipart_is_installed()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 120, in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+RuntimeError: Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+
+2026-05-22 22:57:35,190 - __main__ - INFO - ======================================================================
+2026-05-22 22:57:35,190 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:57:35,191 - __main__ - INFO - ======================================================================
+2026-05-22 22:57:35,191 - __main__ - INFO - Loading configuration...
+2026-05-22 22:57:35,593 - __main__ - INFO - Initializing database...
+2026-05-22 22:57:36,401 - __main__ - INFO - Initializing services...
+2026-05-22 22:57:37,588 - fastapi - ERROR - Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+
+2026-05-22 22:57:37,589 - __main__ - ERROR - Error: Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+Traceback (most recent call last):
+  File "C:\Users\Laptop Home\Documents\face_attendance\app.py", line 65, in main
+    api_server = AttendanceAPIServer(
+        config=config._config,
+        db_service=db_service,
+        attendance_service=attendance_service,
+    )
+  File "C:\Users\Laptop Home\Documents\face_attendance\services\api_server.py", line 70, in __init__
+    self._setup_routes()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\Documents\face_attendance\services\api_server.py", line 181, in _setup_routes
+    @self.app.post("/api/enrollment/manual")
+     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 1450, in decorator
+    self.add_api_route(
+    ~~~~~~~~~~~~~~~~~~^
+        path,
+        ^^^^^
+    ...<23 lines>...
+        generate_unique_id_function=generate_unique_id_function,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 1386, in add_api_route
+    route = route_class(
+        self.prefix + path,
+    ...<27 lines>...
+        ),
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\routing.py", line 949, in __init__
+    self.dependant = get_dependant(
+                     ~~~~~~~~~~~~~^
+        path=self.path_format, call=self.endpoint, scope="function"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 311, in get_dependant
+    param_details = analyze_param(
+        param_name=param_name,
+    ...<2 lines>...
+        is_path_param=is_path_param,
+    )
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 535, in analyze_param
+    ensure_multipart_is_installed()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Laptop Home\AppData\Roaming\Python\Python313\site-packages\fastapi\dependencies\utils.py", line 120, in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+RuntimeError: Form data requires "python-multipart" to be installed. 
+You can install "python-multipart" with: 
+
+pip install python-multipart
+
+2026-05-22 22:58:39,632 - __main__ - INFO - ======================================================================
+2026-05-22 22:58:39,637 - __main__ - INFO - FACE ATTENDANCE SYSTEM - STARTING
+2026-05-22 22:58:39,637 - __main__ - INFO - ======================================================================
+2026-05-22 22:58:39,637 - __main__ - INFO - Loading configuration...
+2026-05-22 22:58:40,048 - __main__ - INFO - Initializing database...
+2026-05-22 22:58:40,958 - __main__ - INFO - Initializing services...
+2026-05-22 22:58:42,392 - __main__ - INFO - ======================================================================
+2026-05-22 22:58:42,453 - __main__ - INFO - ======================================================================
+2026-05-22 22:58:42,453 - __main__ - INFO - Starting API server on 0.0.0.0:8000
+2026-05-22 22:58:42,454 - __main__ - INFO - Health: http://localhost:8000/health
+2026-05-22 22:58:42,454 - __main__ - INFO - API: http://localhost:8000/api
+2026-05-22 22:58:42,454 - __main__ - INFO - 
