@@ -98,6 +98,24 @@ class DatabaseService:
             return []
     
     # ========== EMBEDDINGS MANAGEMENT ==========
+    def get_all_embeddings(self):
+        """Get all embeddings from database."""
+        try:
+            from models.database import FaceEmbedding, bytes_to_embedding
+            
+            session = self.SessionLocal()
+            records = session.query(FaceEmbedding).all()
+            
+            rows = []
+            for record in records:
+                embedding = bytes_to_embedding(record.embedding)
+                rows.append((record.person_id, embedding))
+            
+            session.close()
+            return rows
+        except Exception as e:
+            logger.error(f"[DB] Failed to get all embeddings: {e}")
+            return []
     
     def save_embedding(self, person_id: int, embedding: np.ndarray,
                       quality_score: float, source: str = 'manual',
@@ -448,6 +466,186 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"[DB] Failed to remove ignored face: {e}")
             return False
+    
+    # ========== PENDING SCANS (Backend-Driven Polling) ==========
+    
+    def add_scan(self, scan_id: str, member_id: Optional[int], timestamp: float,
+                 image_base64: str = None, recognized: bool = False,
+                 confidence: float = None, face_quality: str = None) -> bool:
+        """Add a pending scan from backend camera."""
+        try:
+            from models.database import PendingScan
+            
+            session = self.SessionLocal()
+            scan = PendingScan(
+                id=scan_id,
+                member_id=member_id,
+                timestamp=timestamp,
+                image_base64=image_base64,
+                recognized=recognized,
+                confidence=confidence,
+                face_quality=face_quality,
+            )
+            session.add(scan)
+            session.commit()
+            session.close()
+            
+            logger.info(f"[DB] Added scan: {scan_id} (member={member_id})")
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Failed to add scan: {e}")
+            return False
+    
+    def get_pending_scans(self, last_timestamp: float = None) -> List[Dict]:
+        """Get pending scans since last_timestamp."""
+        try:
+            from models.database import PendingScan
+            
+            session = self.SessionLocal()
+            
+            if last_timestamp is None:
+                records = session.query(PendingScan).order_by(PendingScan.timestamp.asc()).all()
+            else:
+                records = session.query(PendingScan).filter(
+                    PendingScan.timestamp > last_timestamp
+                ).order_by(PendingScan.timestamp.asc()).all()
+            
+            scans = []
+            for r in records:
+                scans.append({
+                    'id': r.id,
+                    'member_id': r.member_id,
+                    'timestamp': r.timestamp,
+                    'image_base64': r.image_base64,
+                    'recognized': r.recognized,
+                    'confidence': r.confidence,
+                    'face_quality': r.face_quality,
+                })
+            
+            session.close()
+            return scans
+        except Exception as e:
+            logger.error(f"[DB] Failed to get pending scans: {e}")
+            return []
+    
+    def ack_scan(self, scan_id: str) -> bool:
+        """Acknowledge and delete a scan."""
+        try:
+            from models.database import PendingScan
+            
+            session = self.SessionLocal()
+            session.query(PendingScan).filter(PendingScan.id == scan_id).delete()
+            session.commit()
+            session.close()
+            
+            logger.info(f"[DB] Acknowledged scan: {scan_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Failed to ack scan: {e}")
+            return False
+    
+    def cleanup_old_scans(self, max_age_seconds: int = 3600) -> int:
+        """Delete old scans (default 1 hour)."""
+        try:
+            from models.database import PendingScan
+            from datetime import datetime, timedelta
+            
+            session = self.SessionLocal()
+            cutoff = (datetime.utcnow() - timedelta(seconds=max_age_seconds)).timestamp()
+            
+            deleted = session.query(PendingScan).filter(
+                PendingScan.timestamp < cutoff
+            ).delete()
+            
+            session.commit()
+            session.close()
+            
+            if deleted > 0:
+                logger.info(f"[DB] Cleaned up {deleted} old scans")
+            return deleted
+        except Exception as e:
+            logger.error(f"[DB] Failed to cleanup scans: {e}")
+            return 0
+    
+    # ========== REGISTERED FACES ==========
+    
+    def register_face(self, member_id: int, image_path: str, 
+                     image_base64: str = None) -> bool:
+        """Register/update face for member."""
+        try:
+            from models.database import RegisteredFace
+            
+            session = self.SessionLocal()
+            
+            # Delete existing if any
+            session.query(RegisteredFace).filter(
+                RegisteredFace.member_id == member_id
+            ).delete()
+            
+            # Add new
+            face = RegisteredFace(
+                member_id=member_id,
+                image_path=image_path,
+                image_base64=image_base64,
+            )
+            session.add(face)
+            session.commit()
+            session.close()
+            
+            logger.info(f"[DB] Registered face for member {member_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Failed to register face: {e}")
+            return False
+    
+    def get_registered_face(self, member_id: int) -> Optional[Dict]:
+        """Get registered face for member."""
+        try:
+            from models.database import RegisteredFace
+            
+            session = self.SessionLocal()
+            record = session.query(RegisteredFace).filter(
+                RegisteredFace.member_id == member_id
+            ).first()
+            
+            if record:
+                result = {
+                    'member_id': record.member_id,
+                    'image_path': record.image_path,
+                    'image_base64': record.image_base64,
+                    'registered_at': record.registered_at.isoformat() if record.registered_at else None,
+                }
+                session.close()
+                return result
+            
+            session.close()
+            return None
+        except Exception as e:
+            logger.error(f"[DB] Failed to get registered face: {e}")
+            return None
+    
+    def get_all_registered_faces(self) -> List[Dict]:
+        """Get all registered faces."""
+        try:
+            from models.database import RegisteredFace
+            
+            session = self.SessionLocal()
+            records = session.query(RegisteredFace).all()
+            
+            faces = []
+            for r in records:
+                faces.append({
+                    'member_id': r.member_id,
+                    'image_path': r.image_path,
+                    'image_base64': r.image_base64,
+                    'registered_at': r.registered_at.isoformat() if r.registered_at else None,
+                })
+            
+            session.close()
+            return faces
+        except Exception as e:
+            logger.error(f"[DB] Failed to get registered faces: {e}")
+            return []
     
     # ========== UTILITY METHODS ==========
     

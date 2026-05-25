@@ -1,256 +1,268 @@
-# ============================================================
-# RECOGNIZER MODULE - Embedding Comparison and Identification
-# ============================================================
-# Handles:
-# - Embedding database loading and management
-# - Normalized cosine similarity comparison
-# - Batch similarity computation
-# - Identity voting and confidence aggregation
-
-from typing import Dict, List, Tuple, Optional
 import numpy as np
-import os
-import cv2
-from utils.metrics import get_metrics
+from typing import Dict, List, Tuple, Optional
 
 
 class FaceRecognizer:
-    """
-    Recognition engine for face identification via embeddings.
-    
-    Maintains embedding database and performs:
-    - Embedding averaging per person
-    - Efficient similarity search
-    - Batch comparisons
-    - Confidence tracking
-    """
-    
-    def __init__(self, db_path: str, detector=None, normalize: bool = True):
+    def __init__(self, db_service, vector_db=None, normalize=True):
         """
-        Initialize recognizer and load face database.
+        DB-based recognizer with FAISS vector database support.
         
         Args:
-            db_path: Path to registered_faces directory
-            detector: FaceDetector instance for embedding extraction
-            normalize: Whether to normalize embeddings
+            db_service: DatabaseService instance for SQLite persistence
+            vector_db: FAISSVectorDB instance for fast similarity search
+            normalize: L2-normalize embeddings (required for cosine similarity)
         """
-        self.db_path = db_path
-        self.detector = detector
+        self.db_service = db_service
+        self.vector_db = vector_db
         self.normalize = normalize
-        self.database: Dict[str, List[np.ndarray]] = {}
-        self.database_embeddings: Dict[str, np.ndarray] = {}  # Averaged embeddings
-        self.metrics = get_metrics()
-        
-        self._load_database()
-    
-    def _load_database(self):
-        """Load all embeddings from registered_faces directory."""
-        print(f"\n[RECOGNIZER] Loading database from: {os.path.abspath(self.db_path)}")
-        
-        if not os.path.exists(self.db_path):
-            print(f"[ERROR] Database path not found: {self.db_path}")
-            print(f"[INFO] Create directory: mkdir -p {self.db_path}")
-            return
-        
+
+        # In-memory fallback cache: person_id -> embedding
+        self.database: Dict[str, np.ndarray] = {}
+
+        self.load_database()
+
+    # ============================================================
+    # LOAD FROM DATABASE -> FAISS
+    # ============================================================
+    def load_database(self):
+        """
+        Load embeddings from SQLite and populate FAISS vector DB.
+        Clears existing FAISS index before repopulating to avoid duplicates.
+        """
+        print("[RECOGNIZER] Loading embeddings from database...")
+
         self.database.clear()
-        self.database_embeddings.clear()
         
-        valid_extensions = ('.jpg', '.jpeg', '.png')
-        total_images = 0
-        loaded_faces = 0
-        failed_faces = []
-        
-        for root, _, files in os.walk(self.db_path):
-            for file in sorted(files):
-                if not file.lower().endswith(valid_extensions):
-                    continue
-                
-                total_images += 1
-                img_path = os.path.join(root, file)
-                
-                # Extract name from directory
-                if root != self.db_path:
-                    name = os.path.basename(root)
-                else:
-                    name = os.path.splitext(file)[0]
-                
-                # Load and extract embedding
-                try:
-                    embedding = self._extract_embedding_from_file(img_path)
-                    if embedding is None:
-                        print(f"[SKIP] No face detected in: {file}")
-                        failed_faces.append((file, "no face"))
-                        continue
-                    
-                    if name not in self.database:
-                        self.database[name] = []
-                    
-                    self.database[name].append(embedding)
-                    loaded_faces += 1
-                    print(f"[OK] {name}: {file}")
-                
-                except Exception as e:
-                    print(f"[ERROR] Failed to process {file}: {e}")
-                    failed_faces.append((file, str(e)))
-        
-        # Compute averaged embeddings
-        for name, embeddings in self.database.items():
-            try:
-                emb_array = np.stack(embeddings)
-                avg_embedding = np.mean(emb_array, axis=0)
-                
-                if self.normalize:
-                    avg_embedding = avg_embedding / (np.linalg.norm(avg_embedding) + 1e-6)
-                
-                self.database_embeddings[name] = avg_embedding
-            except Exception as e:
-                print(f"[ERROR] Failed to compute embedding for {name}: {e}")
-        
-        print("\n================================================")
-        print(f"[SUMMARY] Total: {total_images} | Loaded: {loaded_faces} | People: {len(self.database)}")
-        print("================================================\n")
-        
-        if not self.database:
-            print("[WARNING] No faces loaded! Check registered_faces directory structure.")
-            print("[INFO] Expected structure:")
-            print("  registered_faces/")
-            print("    └── person_name/")
-            print("        ├── photo1.jpg")
-            print("        └── photo2.jpg")
-    
-    def _extract_embedding_from_file(self, img_path: str) -> Optional[np.ndarray]:
-        """Extract embedding from image file."""
-        img = cv2.imread(img_path)
-        if img is None:
-            return None
-        
-        # Use detector to get embedding
-        if not hasattr(self, 'detector') or self.detector is None:
-            return None
-        
-        detections, _ = self.detector.detect(img)
-        if not detections or len(detections) == 0:
-            return None
-        
-        # Use first detection
-        return detections[0]['embedding']
-    
-    def identify(self, embedding: np.ndarray, threshold: float = 0.42) -> Tuple[Optional[str], float, Dict]:
-        """
-        Identify person from embedding via similarity matching.
-        
-        Production-optimized with better error handling and logging.
-        
-        Args:
-            embedding: Face embedding to identify (should be normalized)
-            threshold: Cosine distance threshold (0-2 range, lower = more strict)
-                      0.40-0.45 = good for production
-                      0.35 = very strict (many false negatives)
-                      0.50 = lenient (some false positives)
-        
-        Returns:
-            (name, distance, all_scores_dict) or (None, distance, all_scores_dict)
-        """
-        self.metrics.start_timer("identify")
-        
-        # Validate input
-        if embedding is None or len(embedding) == 0:
-            return None, float('inf'), {}
-        
-        if not self.database_embeddings:
-            print("[WARNING] Database is empty - no faces to match against")
-            return None, float('inf'), {}
-        
+        # Reset FAISS index if available
+        if self.vector_db:
+            self.vector_db.clear()
+
+        rows = []
         try:
-            # Normalize query embedding
-            embedding_norm = np.linalg.norm(embedding)
-            if embedding_norm == 0:
-                return None, float('inf'), {}
-            
-            emb = embedding / (embedding_norm + 1e-6)
-            
-            best_name = None
-            best_distance = float('inf')
-            all_scores = {}
-            second_best_distance = float('inf')
-            
-            # Compare against all known identities
-            for name, db_embedding in self.database_embeddings.items():
-                # Cosine similarity
-                similarity = np.dot(db_embedding, emb)
-                similarity = np.clip(similarity, -1.0, 1.0)
-                distance = 1.0 - similarity
-                
-                all_scores[name] = float(distance)
-                
-                # Track top 2 matches for confidence estimation
-                if distance < best_distance:
-                    second_best_distance = best_distance
-                    best_distance = distance
-                    best_name = name
-                elif distance < second_best_distance:
-                    second_best_distance = distance
-            
-            self.metrics.end_timer("identify")
-            
-            # Decision logic - PRODUCTION OPTIMIZED
-            # Accept if:
-            # 1. Best match is below threshold AND
-            # 2. Gap between top matches is significant (to avoid ambiguity)
-            if best_distance < threshold:
-                match_gap = second_best_distance - best_distance
-                if match_gap > 0.05:  # Clear winner
-                    return best_name, best_distance, all_scores
-                elif match_gap > 0.02 and best_distance < threshold * 0.9:  # Confident match
-                    return best_name, best_distance, all_scores
-            
-            return None, best_distance, all_scores
-        
+            # Try bulk load first
+            rows = self.db_service.get_all_embeddings()
         except Exception as e:
-            print(f"[ERROR] Recognition error: {e}")
-            return None, float('inf'), {}
-    
-    
-    def batch_identify(self, embeddings: np.ndarray, 
-                      threshold: float = 0.35) -> List[Tuple[Optional[str], float]]:
+            print(f"[RECOGNIZER] Bulk load failed ({e}), falling back to per-person load...")
+            # Fallback: load persons individually via SQLAlchemy API
+            try:
+                persons = self.db_service.get_all_persons()
+                for person in persons:
+                    pid = person.person_id if hasattr(person, 'person_id') else person.get('person_id')
+                    embs = self.db_service.get_embeddings_for_person(pid)
+                    for emb in embs:
+                        rows.append((pid, emb.tobytes()))
+            except Exception as e2:
+                print(f"[RECOGNIZER] Fallback load also failed: {e2}")
+
+        if not rows:
+            print("[RECOGNIZER] No embeddings found in DB")
+            return
+
+        for row in rows:
+            # Handle both dict-style and tuple-style rows robustly
+            if isinstance(row, dict):
+                person_id = row["person_id"]
+                embedding_blob = row["embedding"]
+            else:
+                person_id = row[0]
+                embedding_blob = row[1]
+
+            embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+
+            if self.normalize:
+                norm = np.linalg.norm(embedding)
+                if norm > 0:
+                    embedding = embedding / norm
+
+            # Store in memory fallback cache
+            self.database[str(person_id)] = embedding
+            
+            # Add to FAISS vector database for fast search
+            if self.vector_db:
+                # Ensure person_id is int for FAISS metadata consistency
+                pid_for_faiss = int(person_id) if str(person_id).isdigit() else person_id
+                self.vector_db.add_embedding(
+                    embedding=embedding,
+                    person_id=pid_for_faiss,
+                    source='database',
+                    quality_score=1.0
+                )
+
+        print(f"[RECOGNIZER] Loaded {len(self.database)} embeddings into memory cache")
+        if self.vector_db:
+            stats = self.vector_db.get_stats()
+            print(f"[RECOGNIZER] FAISS index ready: {stats.get('total_embeddings', 0)} embeddings, "
+                  f"{stats.get('unique_persons', 0)} unique persons")
+
+    # ============================================================
+    # EMBEDDING NORMALIZATION
+    # ============================================================
+    def _normalize(self, emb: np.ndarray) -> np.ndarray:
+        if not self.normalize:
+            return emb
+        norm = np.linalg.norm(emb)
+        return emb / (norm + 1e-6) if norm > 0 else emb
+
+    # ============================================================
+    # IDENTIFY FACE
+    # ============================================================
+    def identify(self, embedding: np.ndarray, threshold: float = 0.6):
         """
-        Identify multiple faces at once (more efficient).
+        Compare face embedding with DB using FAISS vector search.
+        Falls back to in-memory linear scan if FAISS is unavailable or empty.
         
         Args:
-            embeddings: [N, 512] embeddings array
-            threshold: Distance threshold
+            embedding: 512-dim face embedding
+            threshold: Minimum cosine similarity to declare a match (0.0-1.0)
         
         Returns:
-            List of (name, distance) tuples
+            (result_dict, best_score, all_scores_dict)
         """
-        self.metrics.start_timer("batch_identify")
+        if embedding is None:
+            return None, 0.0, {}
+
+        embedding = self._normalize(embedding)
+
+        # Primary path: Use FAISS vector database for fast ANN search
+        if self.vector_db and self.vector_db.get_stats().get('total_embeddings', 0) > 0:
+            return self._identify_with_faiss(embedding, threshold)
         
-        results = []
+        # Fallback path: In-memory linear scan (O(N) brute force)
+        if len(self.database) == 0:
+            return None, 0.0, {}
+            
+        return self._identify_in_memory(embedding, threshold)
+
+    def _identify_with_faiss(self, embedding: np.ndarray, threshold: float):
+        """
+        Fast identification using FAISS approximate nearest neighbor search.
+        """
+        # Search top-5 nearest neighbors with a generous lower bound
+        # so we can populate all_scores from memory cache afterwards
+        results = self.vector_db.search(embedding, k=5, threshold=0.4)
         
-        # Normalize query embeddings
-        embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-6)
+        all_scores: Dict[str, float] = {}
+        best_id: Optional[str] = None
+        best_score = -1.0
         
-        # Stack database embeddings
-        db_embeddings = np.stack(list(self.database_embeddings.values()))
-        db_names = list(self.database_embeddings.keys())
+        # Process FAISS results
+        for person_id, similarity in results:
+            pid_str = str(person_id)
+            all_scores[pid_str] = float(similarity)
+            if similarity > best_score:
+                best_score = similarity
+                best_id = pid_str
         
-        # Batch similarity: [N_queries, N_people]
-        similarities = np.dot(embeddings, db_embeddings.T)
-        similarities = np.clip(similarities, -1.0, 1.0)
-        distances = 1.0 - similarities
+        # Populate remaining scores from memory cache for completeness
+        for pid, db_emb in self.database.items():
+            if pid not in all_scores:
+                score = float(np.dot(embedding, db_emb))
+                all_scores[pid] = score
         
-        # Find best match for each query
-        for i, dist_row in enumerate(distances):
-            best_idx = np.argmin(dist_row)
-            best_distance = float(dist_row[best_idx])
-            best_name = db_names[best_idx] if best_distance < threshold else None
-            results.append((best_name, best_distance))
+        if best_score >= threshold and best_id is not None:
+            person = self.db_service.get_person(best_id)
+            name = self._extract_name(person)
+            return {
+                "recognized": True,
+                "person_id": best_id,
+                "name": name,
+                "confidence": float(best_score),
+            }, best_score, all_scores
         
-        self.metrics.end_timer("batch_identify")
-        return results
-    
-    def reload_database(self):
-        """Hot reload database (for background refresh)."""
-        print("[RECOGNIZER] Reloading database...")
-        self._load_database()
-        print("[RECOGNIZER] Database reloaded")
+        return {
+            "recognized": False,
+            "person_id": None,
+            "name": None,
+            "confidence": float(best_score),
+        }, best_score, all_scores
+
+    def _identify_in_memory(self, embedding: np.ndarray, threshold: float):
+        """
+        Fallback linear scan through in-memory database.
+        """
+        best_id = None
+        best_score = -1.0
+        all_scores = {}
+
+        for person_id, db_emb in self.database.items():
+            score = float(np.dot(embedding, db_emb))
+            all_scores[person_id] = score
+
+            if score > best_score:
+                best_score = score
+                best_id = person_id
+
+        if best_score >= threshold:
+            person = self.db_service.get_person(best_id)
+            name = self._extract_name(person)
+            return {
+                "recognized": True,
+                "person_id": best_id,
+                "name": name,
+                "confidence": float(best_score),
+            }, best_score, all_scores
+
+        return {
+            "recognized": False,
+            "person_id": None,
+            "name": None,
+            "confidence": float(best_score),
+        }, best_score, all_scores
+
+    # ============================================================
+    # ADD / UPDATE EMBEDDING
+    # ============================================================
+    def add_embedding(self, person_id: str, embedding: np.ndarray, 
+                      quality_score: float = 1.0, source: str = 'manual'):
+        """
+        Add new embedding to both FAISS index and SQLite database.
+        Keeps all storage layers synchronized.
+        """
+        embedding = self._normalize(embedding)
+        
+        # Update memory cache
+        self.database[person_id] = embedding
+        
+        # Update FAISS vector database
+        if self.vector_db:
+            pid_for_faiss = int(person_id) if str(person_id).isdigit() else person_id
+            self.vector_db.add_embedding(
+                embedding=embedding,
+                person_id=pid_for_faiss,
+                source=source,
+                quality_score=quality_score
+            )
+        
+        # Persist to SQL database
+        try:
+            self.db_service.save_embedding(
+                person_id=int(person_id) if str(person_id).isdigit() else person_id,
+                embedding=embedding,
+                quality_score=quality_score,
+                source=source
+            )
+        except Exception as e:
+            print(f"[RECOGNIZER] Warning: Failed to save embedding to DB: {e}")
+        
+        print(f"[RECOGNIZER] Added embedding for person {person_id}")
+
+    # ============================================================
+    # HELPERS
+    # ============================================================
+    @staticmethod
+    def _extract_name(person) -> Optional[str]:
+        """Safely extract name from person object or dict."""
+        if person is None:
+            return None
+        if hasattr(person, 'name'):
+            return person.name
+        if isinstance(person, dict):
+            return person.get('name')
+        return None
+
+    # ============================================================
+    # REFRESH DATABASE
+    # ============================================================
+    def reload(self):
+        """Reload all embeddings from DB and rebuild FAISS index."""
+        self.load_database()

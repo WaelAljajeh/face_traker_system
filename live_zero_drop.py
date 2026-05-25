@@ -24,6 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils import Config
 from core import FaceDetector, FaceRecognizer
+from models.database import init_database
+from services.database_service import DatabaseService
+from services.vector_database import FAISSVectorDB
 
 print("=" * 60)
 print("LIVE CAMERA + SERVER CLIENT")
@@ -42,17 +45,23 @@ model_name = insight_cfg.get("model_name", "buffalo_s")
 
 # ── SERVER CONFIG ──
 server_cfg = config.get_section("server") or {}
-SERVER_URL = server_cfg.get("url", "http://localhost:5000")
+SERVER_URL = server_cfg.get("url", "http://localhost:8000")
 SERVER_TIMEOUT = server_cfg.get("timeout", 10)
 
+# ── INITIALIZE DATABASE ──
+engine, SessionLocal = init_database("face_attendance.db")
+db_service = DatabaseService(SessionLocal)
+vector_db = FAISSVectorDB(embedding_dim=512)
+
+# ── INITIALIZE AI MODELS ──
 detector = FaceDetector(
     model_name=model_name,
     confidence_threshold=0.60
 )
 
 recognizer = FaceRecognizer(
-    recognition_cfg.get("db_path", "registered_faces"),
-    detector=detector,
+    db_service=db_service,
+    vector_db=vector_db,
     normalize=True
 )
 
@@ -61,7 +70,7 @@ device_id = camera_cfg.get("source", 0)
 
 print(f"Camera: {device_id} | Model: {model_name} | Threshold: {threshold}")
 print(f"Server: {SERVER_URL}")
-print(f"DB: {list(recognizer.database_embeddings.keys())}")
+print(f"DB: Loaded {len(recognizer.database)} embeddings")
 
 # ─────────────────────────────────────────────────────────────
 # THREADING SETUP
@@ -138,11 +147,18 @@ def detection_worker():
                         float(bbox[0] / scale), float(bbox[1] / scale),
                         float(bbox[2] / scale), float(bbox[3] / scale),
                     ]
+            
             for det in detections:
                 emb = det["embedding"]
-                name, distance, _ = recognizer.identify(emb, threshold=threshold)
+                # Use new recognizer.identify() signature
+                result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
+                
+                name = result.get("name") if result else None
+                confidence = result.get("confidence", 0.0) if result else 0.0
+                
                 det["name"] = str(name) if name else None
-                det["distance"] = float(distance) if distance is not None else 0.0
+                det["distance"] = float(best_score) if best_score is not None else 0.0
+                det["confidence"] = float(confidence)
         except Exception as e:
             print(f"Detection error: {e}")
             detections = []

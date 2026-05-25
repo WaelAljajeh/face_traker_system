@@ -243,6 +243,37 @@ try:
         expires_at = Column(DateTime, nullable=True)
         representative_embedding = Column(LargeBinary, nullable=False)
 
+
+    class PendingScan(Base):
+        """Pending scan event from backend camera."""
+        __tablename__ = 'pending_scans'
+
+        id = Column(String(64), primary_key=True)  # UUID
+        member_id = Column(Integer, ForeignKey('persons.person_id'), nullable=True)  # None if unknown
+        timestamp = Column(Float, nullable=False)  # Unix timestamp
+        image_base64 = Column(Text, nullable=True)  # Base64 encoded image
+        recognized = Column(Boolean, default=False)
+        confidence = Column(Float, nullable=True)
+        face_quality = Column(String(50), nullable=True)
+        created_at = Column(DateTime, default=datetime.utcnow)
+
+        # Relationship
+        person = relationship("Person", foreign_keys=[member_id])
+
+
+    class RegisteredFace(Base):
+        """Registered face for a person."""
+        __tablename__ = 'registered_faces'
+
+        id = Column(Integer, primary_key=True)
+        member_id = Column(Integer, ForeignKey('persons.person_id'), nullable=False, unique=True)
+        image_path = Column(String(512), nullable=False)
+        image_base64 = Column(Text, nullable=True)  # Optional base64 backup
+        registered_at = Column(DateTime, default=datetime.utcnow)
+
+        # Relationship
+        person = relationship("Person")
+
 except ImportError:
     # SQLAlchemy not required for in-memory operation
     pass

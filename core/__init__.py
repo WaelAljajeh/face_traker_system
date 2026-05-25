@@ -3,6 +3,7 @@ from .recognizer import FaceRecognizer
 from .tracker import ByteTrack, Detection, STrack
 from .quality import QualityFilter
 from .liveness import LivenessDetector
+from .embedder import FaceEmbedder
 
 __all__ = [
     'FaceDetector',
@@ -11,5 +12,6 @@ __all__ = [
     'Detection',
     'STrack',
     'QualityFilter',
-    'LivenessDetector'
+    'LivenessDetector',
+    'FaceEmbedder'
 ]

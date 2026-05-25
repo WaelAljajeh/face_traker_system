@@ -1,53 +1,324 @@
-# API Reference - Face Attendance System
+# Complete API Reference - All Endpoints
 
-## Base URL
-```
-http://localhost:8000
-```
+## Quick Start
 
-## Authentication
-Currently using open API. For production, add JWT:
-```
-Authorization: Bearer <token>
+```bash
+# Terminal 1: Start server
+python app.py
+# Server: http://localhost:8000
+
+# Terminal 2: Expose with ngrok
+ngrok http 8000
+# Public URL: https://xxxx-xxxx-xxxx.ngrok-free.dev
+
+# Terminal 3: Update Flutter baseUrl
+const String baseUrl = 'https://xxxx-xxxx-xxxx.ngrok-free.dev';
 ```
 
 ---
 
-## Health & Status
+## All Endpoints (Grouped by Function)
 
-### Check System Health
-```http
+### 🟢 Health & Status
+
+#### GET /health
+Check server health and get statistics.
+
+**Request:**
+```bash
 GET /health
 ```
 
-**Response (200)**:
+**Response (200):**
 ```json
 {
-  "status": "healthy",
-  "timestamp": "2024-01-01T12:00:00Z"
+  "status": "ok",
+  "time": "2026-05-25T10:30:45.123456",
+  "registered_persons": 5,
+  "pending_scans": 2,
+  "registered_faces": 5
 }
 ```
 
-### Get Detailed Status
-```http
-GET /api/health/detailed
+---
+
+### 🟡 Person Management
+
+#### POST /api/persons
+Create a new person for registration.
+
+**Request:**
+```bash
+POST /api/persons?name=John%20Doe
 ```
 
-**Response (200)**:
+**Response (200):**
 ```json
 {
-  "status": "operational",
-  "components": {
-    "database": "connected",
-    "detector": "loaded",
-    "faiss_index": "ready",
-    "api_server": "running"
-  },
-  "stats": {
-    "persons_count": 150,
-    "embeddings_count": 450,
-    "candidates_count": 23,
-    "today_attendance": 142
+  "success": true,
+  "person_id": 1,
+  "name": "John Doe"
+}
+```
+
+---
+
+#### GET /api/persons
+Get all registered persons.
+
+**Request:**
+```bash
+GET /api/persons
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "count": 2,
+  "persons": [
+    {
+      "person_id": 1,
+      "name": "John Doe",
+      "employee_id": null,
+      "is_active": true,
+      "created_at": "2026-05-25T10:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### 🔵 Face Enrollment
+
+#### POST /api/enrollment/manual
+Upload a face image for embedding extraction (direct method).
+
+**Request (multipart form-data):**
+```
+person_id: 1
+name: John Doe
+file: <image_file>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "person_id": 1,
+  "name": "John Doe",
+  "message": "Face enrolled successfully"
+}
+```
+
+---
+
+#### POST /register
+Register face for member (backend-driven method).
+
+**Request (JSON):**
+```json
+{
+  "member_id": 1,
+  "image_base64": "..."
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "member_id": 1,
+  "image_path": "registered_faces/1.jpg"
+}
+```
+
+---
+
+### 🟣 Recognition
+
+#### POST /api/recognize
+Recognize a face from an image (direct method).
+
+**Request (multipart form-data):**
+```
+file: <image_file>
+```
+
+**Response (200 - recognized):**
+```json
+{
+  "success": true,
+  "recognized": true,
+  "person_id": 1,
+  "name": "John Doe",
+  "confidence": 0.92,
+  "best_score": 0.92,
+  "all_scores": {
+    "1": 0.92,
+    "2": 0.45
+  }
+}
+```
+
+**Response (200 - not recognized):**
+```json
+{
+  "success": true,
+  "recognized": false,
+  "person_id": null,
+  "name": null,
+  "confidence": 0.0,
+  "best_score": 0.55,
+  "all_scores": {
+    "1": 0.55,
+    "2": 0.42
+  }
+}
+```
+
+**Response (400 - no face):**
+```json
+{
+  "success": false,
+  "recognized": false,
+  "person_id": null,
+  "name": null,
+  "confidence": 0.0,
+  "message": "No face detected in image"
+}
+```
+
+---
+
+### 📋 Backend-Driven Polling
+
+#### POST /scan
+Backend camera sends a scan event.
+
+**Request (JSON):**
+```json
+{
+  "member_id": 1,
+  "image_base64": "...",
+  "confidence": 0.92,
+  "face_quality": "good"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "scan_id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": 1716523845.123
+}
+```
+
+---
+
+#### GET /poll
+Flutter polls for pending scans from backend camera.
+
+**Request:**
+```bash
+GET /poll
+GET /poll?last_timestamp=1716523845
+GET /poll?last_id=550e8400-e29b-41d4-a716-446655440000
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "count": 2,
+  "scans": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "member_id": 1,
+      "timestamp": 1716523845.123,
+      "image_base64": "...",
+      "recognized": true,
+      "confidence": 0.92,
+      "face_quality": "good"
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440111",
+      "member_id": null,
+      "timestamp": 1716523850.456,
+      "recognized": false
+    }
+  ]
+}
+```
+
+---
+
+#### POST /ack
+Flutter acknowledges a scan (removes from queue).
+
+**Request (JSON):**
+```json
+{
+  "scan_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "scan_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+---
+
+### 🛠️ Debug Endpoints (Development Only)
+
+#### GET /debug/pending
+Show all pending scans in the queue.
+
+#### GET /debug/faces
+Show all registered faces.
+
+#### GET /test_unknown
+Add a test unknown scan for debugging.
+
+---
+
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 400 | Bad Request |
+| 500 | Server Error |
+
+---
+
+## Authentication
+
+Currently: No authentication (open API)
+
+---
+
+## Testing with ngrok
+
+```bash
+# Terminal 1: Start server
+python app.py
+
+# Terminal 2: Expose with ngrok
+ngrok http 8000
+
+# Terminal 3: Test
+export URL="https://xxxx.ngrok-free.dev"
+curl $URL/health
+curl -X POST "$URL/api/persons?name=Test"
+curl -X POST "$URL/api/recognize" -F "file=@face.jpg"
+```
   },
   "uptime_seconds": 3600
 }
