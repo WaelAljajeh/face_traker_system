@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-Live Camera + Flask Server Client (with Unknown Face Handling)
+Live Camera + Flask Server Client
 ================================================================
-- Sends KNOWN faces: member_id only (attendance record)
-- Sends UNKNOWN faces: image_base64 (for admin review/enrollment)
-- Server stores both in pending_scans table
-
-Usage:
-    python live_server_client.py
+Full-resolution detection + direct embedding usage.
+No frame scaling, no double-detection on tight crops.
 """
 
 import sys
@@ -36,12 +32,13 @@ config = Config.load("config.yaml")
 recognition_cfg = config.get_section("recognition")
 threshold = recognition_cfg.get("similarity_threshold", 0.45)
 
+# ── CRITICAL: Use full resolution ──
 perf_cfg = config.get_section("performance") or {}
-inference_every_n = perf_cfg.get("inference_every_n_frames", 2)
-frame_scale = perf_cfg.get("frame_scale", 0.5)
+inference_every_n = perf_cfg.get("inference_every_n_frames", 3)
+frame_scale = 1.0  # <-- FIXED: was 0.5, now 1.0. Do not scale down.
 
 insight_cfg = config.get_section("insightface") or {}
-model_name = insight_cfg.get("model_name", "buffalo_s")
+model_name = insight_cfg.get("model_name", "buffalo_l")
 
 # ── SERVER CONFIG ──
 server_cfg = config.get_section("server") or {}
@@ -55,8 +52,10 @@ vector_db = FAISSVectorDB(embedding_dim=512)
 
 # ── INITIALIZE AI MODELS ──
 detector = FaceDetector(
-    model_name=model_name,
-    confidence_threshold=0.60
+    model_name='buffalo_l',
+    det_size=(640, 640),
+    det_thresh=0.5,           # must match enrollment
+    confidence_threshold=0.5,
 )
 
 recognizer = FaceRecognizer(
@@ -84,15 +83,13 @@ frame_counter = 0
 counter_lock = threading.Lock()
 KILL_SIGNAL = None
 
-# Cooldown timers
 last_scan_time = {}
 last_unknown_time = 0
-SCAN_COOLDOWN_SECONDS = 8      # Between scans of same known person
-UNKNOWN_COOLDOWN_SECONDS = 10  # Between unknown face submissions
+SCAN_COOLDOWN_SECONDS = 8
+UNKNOWN_COOLDOWN_SECONDS = 10
 
 
 def send_known(member_id):
-    """Send recognized person to server."""
     try:
         resp = requests.post(
             f"{SERVER_URL}/scan",
@@ -110,18 +107,14 @@ def send_known(member_id):
 
 
 def send_unknown(image_b64):
-    """Send unknown face image to server for later review."""
     try:
         resp = requests.post(
             f"{SERVER_URL}/scan",
-            json={
-                "member_id": None,
-                "image_base64": image_b64
-            },
+            json={"member_id": None, "image_base64": image_b64},
             timeout=SERVER_TIMEOUT
         )
         if resp.status_code == 200:
-            print(f"  [SERVER] Unknown face submitted for review")
+            print(f"  [SERVER] Unknown face submitted")
             return True
         else:
             print(f"  [SERVER] Error {resp.status_code}: {resp.text}")
@@ -131,40 +124,58 @@ def send_unknown(image_b64):
 
 
 def detection_worker():
-    """Background thread: runs AI, posts results."""
+    """Background thread: runs AI on full-resolution frames."""
     while True:
         item = frame_queue.get()
         if item is KILL_SIGNAL:
             break
-        fid, small_frame, scale, full_frame_b64 = item
+        fid, frame = item
 
         try:
-            detections, _ = detector.detect(small_frame)
-            if scale < 1.0:
-                for det in detections:
-                    bbox = det["bbox"]
-                    det["bbox"] = [
-                        float(bbox[0] / scale), float(bbox[1] / scale),
-                        float(bbox[2] / scale), float(bbox[3] / scale),
-                    ]
-            
+            # ── DETECT on FULL-RES frame ──
+            detections, _ = detector.detect(frame)
+            print(f"[WORKER] Frame {fid}: {len(detections)} face(s)")
+
+            # ── USE EMBEDDING DIRECTLY from detection ──
+            # Do NOT re-crop and re-detect. The embedding from detector.detect()
+            # is already extracted from the full-resolution frame by InsightFace.
             for det in detections:
-                emb = det["embedding"]
-                # Use new recognizer.identify() signature
+                emb = det.get("embedding")
+                if emb is None:
+                    det["name"] = None
+                    continue
+
+                print(f"[WORKER] emb_norm={np.linalg.norm(emb):.4f}")
+
+                # ── RECOGNIZE ──
                 result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
-                
+                print(f"[WORKER] Result: recognized={result.get('recognized') if result else 'N/A'}, score={best_score:.4f}")
+
+                if all_scores:
+                    top3 = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+                    print(f"[WORKER] Top 3: {top3}")
+
+                # ── DEBUG: save frame if best score is suspiciously low ──
+                if best_score < 0.3:
+                    debug_path = f"debug_low_score_frame_{fid}_{best_score:.3f}.jpg"
+            
+                    print(f"[WORKER] 💾 Saved low-score frame: {debug_path}")
+                person_id = result.get("person_id") if result else None 
                 name = result.get("name") if result else None
                 confidence = result.get("confidence", 0.0) if result else 0.0
-                
+                det["person_id"] = person_id     
                 det["name"] = str(name) if name else None
                 det["distance"] = float(best_score) if best_score is not None else 0.0
                 det["confidence"] = float(confidence)
+
         except Exception as e:
-            print(f"Detection error: {e}")
+            print(f"[WORKER] Error: {e}")
+            import traceback
+            traceback.print_exc()
             detections = []
 
         try:
-            result_queue.put_nowait((fid, detections, full_frame_b64))
+            result_queue.put_nowait((fid, detections))
         except queue.Full:
             pass
         frame_queue.task_done()
@@ -201,37 +212,28 @@ while True:
     frame_count += 1
     h, w = frame.shape[:2]
 
-    # ── SUBMIT TO DETECTION THREAD ──
+    # ── SUBMIT FULL-RES FRAME to worker ──
     if frame_count % inference_every_n == 0:
         with counter_lock:
             current_fid = frame_counter
             frame_counter += 1
 
-        if frame_scale < 1.0:
-            small = cv2.resize(frame, (int(w * frame_scale), int(h * frame_scale)))
-        else:
-            small = frame
-
-        # Encode full frame for unknown face submission
-        _, buf = cv2.imencode('.jpg', frame)
-        frame_b64 = base64.b64encode(buf).decode('utf-8')
-
         try:
-            frame_queue.put_nowait((current_fid, small, frame_scale, frame_b64))
+            frame_queue.put_nowait((current_fid, frame.copy()))
         except queue.Full:
             try:
                 frame_queue.get_nowait()
                 frame_queue.task_done()
-                frame_queue.put_nowait((current_fid, small, frame_scale, frame_b64))
+                frame_queue.put_nowait((current_fid, frame.copy()))
             except queue.Empty:
                 pass
 
     # ── COLLECT RESULTS ──
     try:
         while True:
-            fid, dets, fb64 = result_queue.get_nowait()
+            fid, dets = result_queue.get_nowait()
             with results_lock:
-                latest_results[fid] = (dets, fb64)
+                latest_results[fid] = dets
             result_queue.task_done()
     except queue.Empty:
         pass
@@ -242,13 +244,14 @@ while True:
     with results_lock:
         if latest_results:
             best_fid = max(latest_results.keys())
-            detections, frame_b64 = latest_results[best_fid]
+            detections = latest_results[best_fid]
             for old_fid in list(latest_results.keys()):
                 if old_fid < best_fid - 5:
                     del latest_results[old_fid]
         else:
             detections = []
-            frame_b64 = None
+
+    frame_b64 = None
 
     if not detections:
         cv2.putText(display, "NO FACE", (20, 40),
@@ -257,44 +260,37 @@ while True:
         for det in detections:
             bbox = det["bbox"]
             x1, y1, x2, y2 = map(int, bbox)
+            person_id=det.get("person_id")
             name = det.get("name")
             distance = det.get("distance", 0)
             conf = det.get("confidence", 0)
 
             if name:
-                # ── KNOWN FACE ──
                 color = (0, 255, 0)
                 label = f"{name} | {distance:.3f}"
-                status = f"MATCH: {name}"
+                status = f"MATCH: {name} ({distance:.3f})"
 
                 now = time.time()
-                last_time = last_scan_time.get(name, 0)
+                last_time = last_scan_time.get(person_id, 0)
                 if now - last_time > SCAN_COOLDOWN_SECONDS:
-                    last_scan_time[name] = now
-                    threading.Thread(
-                        target=send_known,
-                        args=(name,),
-                        daemon=True
-                    ).start()
+                    last_scan_time[person_id] = now
+                    threading.Thread(target=send_known, args=(person_id,), daemon=True).start()
                     label += " [SENT]"
                 else:
                     label += " [COOLDOWN]"
             else:
-                # ── UNKNOWN FACE ──
                 color = (0, 165, 255)
-                label = "? UNKNOWN"
-                status = "UNKNOWN FACE"
+                label = f"? UNKNOWN ({distance:.3f})"
+                status = f"UNKNOWN ({distance:.3f})"
 
-                 
                 now = time.time()
                 if now - last_unknown_time > UNKNOWN_COOLDOWN_SECONDS:
                     last_unknown_time = now
+                    if frame_b64 is None:
+                        _, buf = cv2.imencode('.jpg', frame)
+                        frame_b64 = base64.b64encode(buf).decode('utf-8')
                     if frame_b64:
-                        threading.Thread(
-                            target=send_unknown,
-                            args=(frame_b64,),
-                            daemon=True
-                        ).start()
+                        threading.Thread(target=send_unknown, args=(frame_b64,), daemon=True).start()
                         label += " [SENT]"
                     else:
                         label += " [NO IMG]"
@@ -306,7 +302,7 @@ while True:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             if status != last_status:
-                print(f"[Frame {frame_count}] {status} | conf={conf:.2f}")
+                print(f"[Frame {frame_count}] {status}")
                 last_status = status
 
     # FPS
@@ -316,7 +312,7 @@ while True:
     cv2.putText(display, f"FPS: {fps_display:.1f} | Frame: {frame_count}",
                 (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-    cv2.imshow("Live Camera + Server Client", display)
+    cv2.imshow("Live Camera", display)
 
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break

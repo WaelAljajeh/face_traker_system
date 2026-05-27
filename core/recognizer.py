@@ -4,62 +4,43 @@ from typing import Dict, List, Tuple, Optional
 
 class FaceRecognizer:
     def __init__(self, db_service, vector_db=None, normalize=True):
-        """
-        DB-based recognizer with FAISS vector database support.
-        
-        Args:
-            db_service: DatabaseService instance for SQLite persistence
-            vector_db: FAISSVectorDB instance for fast similarity search
-            normalize: L2-normalize embeddings (required for cosine similarity)
-        """
         self.db_service = db_service
         self.vector_db = vector_db
         self.normalize = normalize
-
-        # In-memory fallback cache: person_id -> embedding
         self.database: Dict[str, np.ndarray] = {}
-
         self.load_database()
 
-    # ============================================================
-    # LOAD FROM DATABASE -> FAISS
-    # ============================================================
     def load_database(self):
-        """
-        Load embeddings from SQLite and populate FAISS vector DB.
-        Clears existing FAISS index before repopulating to avoid duplicates.
-        """
-        print("[RECOGNIZER] Loading embeddings from database...")
-
+        print("[RECOGNIZER] ========== load_database() START ==========")
         self.database.clear()
         
-        # Reset FAISS index if available
         if self.vector_db:
+            print("[RECOGNIZER] Clearing FAISS index")
             self.vector_db.clear()
 
         rows = []
         try:
-            # Try bulk load first
             rows = self.db_service.get_all_embeddings()
+            print(f"[RECOGNIZER] Bulk load returned {len(rows)} rows")
         except Exception as e:
-            print(f"[RECOGNIZER] Bulk load failed ({e}), falling back to per-person load...")
-            # Fallback: load persons individually via SQLAlchemy API
+            print(f"[RECOGNIZER] Bulk load failed: {e}")
             try:
                 persons = self.db_service.get_all_persons()
+                print(f"[RECOGNIZER] Fallback: loaded {len(persons)} persons")
                 for person in persons:
                     pid = person.person_id if hasattr(person, 'person_id') else person.get('person_id')
                     embs = self.db_service.get_embeddings_for_person(pid)
                     for emb in embs:
                         rows.append((pid, emb.tobytes()))
+                print(f"[RECOGNIZER] Fallback produced {len(rows)} total rows")
             except Exception as e2:
-                print(f"[RECOGNIZER] Fallback load also failed: {e2}")
+                print(f"[RECOGNIZER] Fallback also failed: {e2}")
 
         if not rows:
-            print("[RECOGNIZER] No embeddings found in DB")
+            print("[RECOGNIZER] ⚠️ No embeddings found in DB")
             return
 
-        for row in rows:
-            # Handle both dict-style and tuple-style rows robustly
+        for i, row in enumerate(rows):
             if isinstance(row, dict):
                 person_id = row["person_id"]
                 embedding_blob = row["embedding"]
@@ -74,12 +55,9 @@ class FaceRecognizer:
                 if norm > 0:
                     embedding = embedding / norm
 
-            # Store in memory fallback cache
             self.database[str(person_id)] = embedding
             
-            # Add to FAISS vector database for fast search
             if self.vector_db:
-                # Ensure person_id is int for FAISS metadata consistency
                 pid_for_faiss = int(person_id) if str(person_id).isdigit() else person_id
                 self.vector_db.add_embedding(
                     embedding=embedding,
@@ -91,77 +69,84 @@ class FaceRecognizer:
         print(f"[RECOGNIZER] Loaded {len(self.database)} embeddings into memory cache")
         if self.vector_db:
             stats = self.vector_db.get_stats()
-            print(f"[RECOGNIZER] FAISS index ready: {stats.get('total_embeddings', 0)} embeddings, "
-                  f"{stats.get('unique_persons', 0)} unique persons")
+            print(f"[RECOGNIZER] FAISS stats: {stats}")
+        print("[RECOGNIZER] ========== load_database() END ==========")
+        for pid, emb in list(self.database.items())[:3]:
+         print(f"[DEBUG] Stored {pid} norm = {np.linalg.norm(emb):.4f}")
 
-    # ============================================================
-    # EMBEDDING NORMALIZATION
-    # ============================================================
     def _normalize(self, emb: np.ndarray) -> np.ndarray:
         if not self.normalize:
             return emb
         norm = np.linalg.norm(emb)
         return emb / (norm + 1e-6) if norm > 0 else emb
 
-    # ============================================================
-    # IDENTIFY FACE
-    # ============================================================
     def identify(self, embedding: np.ndarray, threshold: float = 0.6):
-        """
-        Compare face embedding with DB using FAISS vector search.
-        Falls back to in-memory linear scan if FAISS is unavailable or empty.
-        
-        Args:
-            embedding: 512-dim face embedding
-            threshold: Minimum cosine similarity to declare a match (0.0-1.0)
-        
-        Returns:
-            (result_dict, best_score, all_scores_dict)
-        """
+        print(f"\n[RECOGNIZER] ========== identify() START ==========")
+        print(f"[RECOGNIZER] Input embedding shape: {getattr(embedding, 'shape', 'None')}")
+        print(f"[RECOGNIZER] Input embedding norm: {np.linalg.norm(embedding):.4f}")
+        print(f"[RECOGNIZER] Threshold: {threshold}")
+        print(f"[RECOGNIZER] Memory cache size: {len(self.database)}")
+        print(f"[RECOGNIZER] Vector DB present: {self.vector_db is not None}")
+
         if embedding is None:
+            print("[RECOGNIZER] ❌ embedding is None")
             return None, 0.0, {}
 
         embedding = self._normalize(embedding)
+        print(f"[RECOGNIZER] After normalize norm: {np.linalg.norm(embedding):.4f}")
 
-        # Primary path: Use FAISS vector database for fast ANN search
-        if self.vector_db and self.vector_db.get_stats().get('total_embeddings', 0) > 0:
-            return self._identify_with_faiss(embedding, threshold)
-        
-        # Fallback path: In-memory linear scan (O(N) brute force)
-        if len(self.database) == 0:
-            return None, 0.0, {}
-            
-        return self._identify_in_memory(embedding, threshold)
+        faiss_count = 0
+        if self.vector_db:
+            try:
+                faiss_count = self.vector_db.get_stats().get('total_embeddings', 0)
+                print(f"[RECOGNIZER] FAISS has {faiss_count} embeddings")
+            except Exception as e:
+                print(f"[RECOGNIZER] FAISS stats error: {e}")
+
+        if self.vector_db and faiss_count > 0:
+            print("[RECOGNIZER] Using FAISS path")
+            result = self._identify_with_faiss(embedding, threshold)
+        else:
+            print("[RECOGNIZER] Using in-memory linear scan path")
+            result = self._identify_in_memory(embedding, threshold)
+
+        print(f"[RECOGNIZER] ========== identify() END ==========\n")
+        return result
 
     def _identify_with_faiss(self, embedding: np.ndarray, threshold: float):
-        """
-        Fast identification using FAISS approximate nearest neighbor search.
-        """
-        # Search top-5 nearest neighbors with a generous lower bound
-        # so we can populate all_scores from memory cache afterwards
-        results = self.vector_db.search(embedding, k=5, threshold=0.4)
+        print("[RECOGNIZER] --- FAISS search start ---")
         
+        # Search with a low threshold to see ALL candidates
+        results = self.vector_db.search(embedding, k=5, threshold=0.0)
+        print(f"[RECOGNIZER] FAISS raw results (k=5, threshold=0.0): {results}")
+
         all_scores: Dict[str, float] = {}
         best_id: Optional[str] = None
         best_score = -1.0
         
-        # Process FAISS results
         for person_id, similarity in results:
             pid_str = str(person_id)
             all_scores[pid_str] = float(similarity)
+            print(f"[RECOGNIZER]   FAISS candidate: pid={pid_str}, raw_score={similarity:.6f}")
             if similarity > best_score:
                 best_score = similarity
                 best_id = pid_str
         
-        # Populate remaining scores from memory cache for completeness
+        # Also compute exact dot products from memory for comparison
+        print("[RECOGNIZER] Computing exact dot products from memory cache:")
         for pid, db_emb in self.database.items():
-            if pid not in all_scores:
-                score = float(np.dot(embedding, db_emb))
-                all_scores[pid] = score
-        
+            exact_score = float(np.dot(embedding, db_emb))
+            all_scores[pid] = exact_score
+            marker = " <-- FAISS best" if pid == best_id else ""
+            print(f"[RECOGNIZER]   Memory exact: pid={pid}, exact_dot={exact_score:.6f}{marker}")
+
+        print(f"[RECOGNIZER] Best FAISS score: {best_score:.6f}, best_id: {best_id}")
+        print(f"[RECOGNIZER] Threshold check: {best_score:.6f} >= {threshold} ? {best_score >= threshold}")
+
         if best_score >= threshold and best_id is not None:
             person = self.db_service.get_person(best_id)
             name = self._extract_name(person)
+            print(f"[RECOGNIZER] ✅ MATCH: id={best_id}, name={name}, score={best_score:.4f}")
             return {
                 "recognized": True,
                 "person_id": best_id,
@@ -169,6 +154,7 @@ class FaceRecognizer:
                 "confidence": float(best_score),
             }, best_score, all_scores
         
+        print(f"[RECOGNIZER] ❌ NO MATCH (best score {best_score:.4f} < {threshold})")
         return {
             "recognized": False,
             "person_id": None,
@@ -177,9 +163,7 @@ class FaceRecognizer:
         }, best_score, all_scores
 
     def _identify_in_memory(self, embedding: np.ndarray, threshold: float):
-        """
-        Fallback linear scan through in-memory database.
-        """
+        print("[RECOGNIZER] --- In-memory linear scan start ---")
         best_id = None
         best_score = -1.0
         all_scores = {}
@@ -187,14 +171,20 @@ class FaceRecognizer:
         for person_id, db_emb in self.database.items():
             score = float(np.dot(embedding, db_emb))
             all_scores[person_id] = score
-
+            status = ""
             if score > best_score:
                 best_score = score
                 best_id = person_id
+                status = " [NEW BEST]"
+            print(f"[RECOGNIZER]   pid={person_id}, score={score:.6f}{status}")
+
+        print(f"[RECOGNIZER] Best memory score: {best_score:.6f}, best_id: {best_id}")
+        print(f"[RECOGNIZER] Threshold check: {best_score:.6f} >= {threshold} ? {best_score >= threshold}")
 
         if best_score >= threshold:
             person = self.db_service.get_person(best_id)
             name = self._extract_name(person)
+            print(f"[RECOGNIZER] ✅ MATCH: id={best_id}, name={name}, score={best_score:.4f}")
             return {
                 "recognized": True,
                 "person_id": best_id,
@@ -202,6 +192,7 @@ class FaceRecognizer:
                 "confidence": float(best_score),
             }, best_score, all_scores
 
+        print(f"[RECOGNIZER] ❌ NO MATCH (best score {best_score:.4f} < {threshold})")
         return {
             "recognized": False,
             "person_id": None,
@@ -209,21 +200,17 @@ class FaceRecognizer:
             "confidence": float(best_score),
         }, best_score, all_scores
 
-    # ============================================================
-    # ADD / UPDATE EMBEDDING
-    # ============================================================
     def add_embedding(self, person_id: str, embedding: np.ndarray, 
                       quality_score: float = 1.0, source: str = 'manual'):
-        """
-        Add new embedding to both FAISS index and SQLite database.
-        Keeps all storage layers synchronized.
-        """
+        print(f"\n[RECOGNIZER] ========== add_embedding() START ==========")
+        print(f"[RECOGNIZER] Adding for person_id={person_id}, source={source}")
+        print(f"[RECOGNIZER] Input embedding shape: {embedding.shape}, norm: {np.linalg.norm(embedding):.4f}")
+
         embedding = self._normalize(embedding)
-        
-        # Update memory cache
+        print(f"[RECOGNIZER] After normalize norm: {np.linalg.norm(embedding):.4f}")
+
         self.database[person_id] = embedding
         
-        # Update FAISS vector database
         if self.vector_db:
             pid_for_faiss = int(person_id) if str(person_id).isdigit() else person_id
             self.vector_db.add_embedding(
@@ -232,8 +219,8 @@ class FaceRecognizer:
                 source=source,
                 quality_score=quality_score
             )
+            print(f"[RECOGNIZER] Added to FAISS, new stats: {self.vector_db.get_stats()}")
         
-        # Persist to SQL database
         try:
             self.db_service.save_embedding(
                 person_id=int(person_id) if str(person_id).isdigit() else person_id,
@@ -241,17 +228,14 @@ class FaceRecognizer:
                 quality_score=quality_score,
                 source=source
             )
+            print("[RECOGNIZER] Saved to SQLite DB")
         except Exception as e:
-            print(f"[RECOGNIZER] Warning: Failed to save embedding to DB: {e}")
+            print(f"[RECOGNIZER] Warning: DB save failed: {e}")
         
-        print(f"[RECOGNIZER] Added embedding for person {person_id}")
+        print(f"[RECOGNIZER] ========== add_embedding() END ==========\n")
 
-    # ============================================================
-    # HELPERS
-    # ============================================================
     @staticmethod
     def _extract_name(person) -> Optional[str]:
-        """Safely extract name from person object or dict."""
         if person is None:
             return None
         if hasattr(person, 'name'):
@@ -260,9 +244,6 @@ class FaceRecognizer:
             return person.get('name')
         return None
 
-    # ============================================================
-    # REFRESH DATABASE
-    # ============================================================
     def reload(self):
-        """Reload all embeddings from DB and rebuild FAISS index."""
+        print("[RECOGNIZER] reload() called")
         self.load_database()

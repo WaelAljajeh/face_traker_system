@@ -149,7 +149,7 @@ performance:
   max_memory_mb: 2048
   garbage_collection_interval: 60
   inference_every_n_frames: 3   # Only detect every 3rd frame
-  frame_scale: 0.5 
+  frame_scale: 1.0  # Scale factor for input frames (e.g., 0.5 for half size) 
 
 # ============================================================
 # SECURITY

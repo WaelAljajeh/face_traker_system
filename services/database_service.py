@@ -42,26 +42,35 @@ class DatabaseService:
     
     # ========== PERSON MANAGEMENT ==========
     
-    def create_person(self, name: str, employee_id: str = None, 
-                     metadata: dict = None) -> Optional[int]:
-        """Create new registered person."""
+    def create_person(
+        self,
+        person_id: int,
+        name: str,
+        metadata: dict = None
+    ) -> Optional[int]:
         try:
             from models.database import Person
-            
+
             session = self.SessionLocal()
+
             person = Person(
+                person_id=person_id,
                 name=name,
-                employee_id=employee_id,
                 is_active=True,
-                metadata=self._dict_to_json(metadata or {})
+                meta_data=self._dict_to_json(metadata or {})
             )
+
             session.add(person)
             session.commit()
-            person_id = person.person_id
+
+            created_person_id = person.person_id
+
             session.close()
-            
-            logger.info(f"[DB] Created person: {name} (ID={person_id})")
-            return person_id
+
+            logger.info(f"[DB] Created person: {name} (ID={created_person_id})")
+
+            return created_person_id
+
         except Exception as e:
             logger.error(f"[DB] Failed to create person: {e}")
             return None

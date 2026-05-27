@@ -1,103 +1,96 @@
-# ============================================================
-# DETECTOR MODULE - Face Detection with InsightFace
-# ============================================================
-# Wraps InsightFace SCRFD detector with:
-# - Initialization with configurable providers
-# - Batch detection support
-# - Performance profiling
-# - Confidence filtering
+# core/detector.py
+"""
+Face detector using shared InsightFace singleton.
+Returns normalized embeddings that match the embedder.
+"""
 
-from typing import List, Tuple, Optional
+import time
 import numpy as np
-from insightface.app import FaceAnalysis
+from typing import List, Tuple, Dict, Optional
+from core.face_model import get_face_app, normalize_embedding
 from utils.metrics import get_metrics
 
 
 class FaceDetector:
     """
     Face detector using InsightFace (SCRFD + ArcFace).
-    
-    Keeps models in memory for fast inference.
+    Uses shared singleton to ensure same model as embedder.
     """
-    
-    def __init__(self, model_name: str = 'buffalo_l',
-                 providers: List[str] = None,
-                 det_size: Tuple[int, int] = (320, 320),
-                 confidence_threshold: float = 0.70):
+
+    def __init__(
+        self,
+        model_name: str = 'buffalo_l',
+        providers: List[str] = None,
+        det_size: Tuple[int, int] = (640, 640),
+        det_thresh: float = 0.5,
+        confidence_threshold: float = 0.50,
+    ):
         """
-        Initialize detector with production settings.
-        
-        Args:
-            model_name: InsightFace model ('buffalo_l' recommended for production)
-            providers: ONNX Runtime providers (GPU first, fallback to CPU)
-            det_size: Detection input size
-            confidence_threshold: Min detection confidence (0.70-0.75 recommended for production)
+        Initialize detector – uses shared FaceAnalysis instance.
         """
-        if providers is None:
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        
         self.confidence_threshold = confidence_threshold
+        self.det_thresh = det_thresh
+        self.det_size = det_size
         self.metrics = get_metrics()
-        self.app = None
-        
-        # Initialize InsightFace
-        print(f"[DETECTOR] Initializing InsightFace ({model_name})...")
-        try:
-            self.app = FaceAnalysis(name=model_name, providers=providers)
-            self.app.prepare(ctx_id=0, det_size=det_size)
-            print(f"[DETECTOR] ✅ Ready (providers: {providers})")
-        except Exception as e:
-            print(f"[ERROR] Failed to initialize detector: {e}")
-            print("[INFO] Ensure InsightFace is installed: pip install insightface>=0.7.3")
-            raise
-    
+
+        # Use singleton – identical to embedder
+        self.app = get_face_app(
+            model_name=model_name,
+            det_size=det_size,
+            det_thresh=det_thresh,
+            providers=providers,
+        )
+
+        print(f"[DETECTOR] Using shared InsightFace (det_thresh={det_thresh}, det_size={det_size})")
+
     def detect(self, frame: np.ndarray) -> Tuple[List[dict], float]:
         """
         Detect faces in frame.
-        
-        Args:
-            frame: Input frame (BGR)
-        
+
         Returns:
             List of detections with keys:
             - bbox: [x1, y1, x2, y2]
             - confidence: Detection confidence
             - kps: Landmarks (5 points)
-            - embedding: Face embedding (512-dim ArcFace)
-            
-            Elapsed time (ms)
+            - embedding: Normalized face embedding (unit norm)
+            elapsed time (ms)
         """
         self.metrics.start_timer("detect")
-        
+
+        t0 = time.time()
         faces = self.app.get(frame)
-        
+        dt = time.time() - t0
+
         detections = []
         for face in faces:
-            if face.det_score < self.confidence_threshold:
+            score = float(face.det_score)
+            if score < self.confidence_threshold:
                 continue
-            
+
+            # RAW embedding from InsightFace
+            raw_emb = face.embedding.astype(np.float32)
+            # Normalize to match stored embeddings
+            emb = normalize_embedding(raw_emb)
+
             det = {
                 'bbox': face.bbox.astype(np.float32),
-                'confidence': float(face.det_score),
+                'confidence': score,
                 'landmarks': face.kps.astype(np.float32) if hasattr(face, 'kps') else None,
-                'embedding': face.embedding.astype(np.float32),
+                'embedding': emb,   # normalized!
             }
             detections.append(det)
-        
+
         elapsed = self.metrics.end_timer("detect")
         return detections, elapsed
-    
+
     def extract_embedding(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """
-        Extract embedding from frame with single largest face.
-        
-        Args:
-            frame: Input frame
-        
-        Returns:
-            Face embedding (512-dim normalized) or None if no face
+        Extract normalized embedding of the highest-confidence face.
         """
         faces = self.app.get(frame)
         if not faces:
             return None
-        return faces[0].embedding.astype(np.float32)
+
+        face = max(faces, key=lambda f: f.det_score)
+        raw_emb = face.embedding.astype(np.float32)
+        return normalize_embedding(raw_emb)

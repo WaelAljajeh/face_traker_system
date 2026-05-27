@@ -162,7 +162,7 @@ class AttendanceAPIServer:
         # ================= ENROLLMENT =================
         @self.app.post("/api/enrollment/manual")
         async def enroll(
-            person_id: str = Form(None),
+            person_id: str = Form(...),
             name: str = Form(...),
             file: UploadFile = File(...)
         ):
@@ -170,32 +170,47 @@ class AttendanceAPIServer:
             Enroll a person with face image.
             Extracts embedding and stores it.
             """
+            print("start the enrollment")
             if not db or not recognizer or not embedders:
                 raise HTTPException(500, "Services not ready")
-
+              
             try:
-                # Create person if person_id not provided
-                if not person_id:
-                    person_id = db.create_person(name=name)
-                    if not person_id:
-                        raise HTTPException(500, "Failed to create person")
-                
+                # Create person
+                created_person_id = db.create_person(
+                    person_id=int(person_id),
+                    name=name
+                )
+                print(f"created person with id: {created_person_id}")
+                if not created_person_id:
+                    raise HTTPException(500, "Failed to create person")
+                print(f"created person with id: {created_person_id}")    
+
                 # Read image
                 image_bytes = await file.read()
+                debug_path = f"debug_enroll_{person_id}_{int(time.time())}.jpg"
+                with open(debug_path, "wb") as f:
+                  f.write(image_bytes)
+                print(f"Saved debug image: {debug_path}, size: {len(image_bytes)} bytes")
+    
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
+    
+                print(f"Decoded frame shape: {frame.shape if frame is not None else 'None'}")
+             
+
                 if frame is None:
                     raise HTTPException(400, "Invalid image file")
+                print("Face frame good")
 
-                # Extract embedding using embedder
+                # Extract embedding
                 embedding = embedders.extract_embedding(frame)
                 if embedding is None:
                     raise HTTPException(400, "No face detected in image")
+                print("Embedd frame good")
 
-                # Save embedding via recognizer (syncs to DB and FAISS)
+                # Save embedding
                 recognizer.add_embedding(
-                    person_id=str(person_id),
+                    person_id=str(created_person_id),
                     embedding=embedding,
                     quality_score=1.0,
                     source="manual_enrollment"
@@ -203,11 +218,11 @@ class AttendanceAPIServer:
 
                 return {
                     "success": True,
-                    "person_id": person_id,
+                    "person_id": created_person_id,
                     "name": name,
                     "message": "Face enrolled successfully"
                 }
-            
+
             except HTTPException:
                 raise
             except Exception as e:
@@ -283,7 +298,8 @@ class AttendanceAPIServer:
                 scan_id = str(uuid.uuid4())
                 timestamp = time.time()
                 
-                # Store scan event
+                # Store scan 
+                # event
                 success = db.add_scan(
                     scan_id=scan_id,
                     member_id=request.member_id,

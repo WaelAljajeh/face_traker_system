@@ -29,7 +29,11 @@ def main():
 
     # ===================== AI =====================
     # Initialize embedder with InsightFace model
-    embedders = FaceEmbedder(model=None)  # Auto-loads InsightFace
+    embedder = FaceEmbedder(
+    model_name='buffalo_l',
+    det_size=(640, 640),
+    det_thresh=0.5,
+)  # Auto-loads InsightFace
     
     detector = FaceDetector()
     db_service = DatabaseService(SessionLocal)
@@ -56,7 +60,7 @@ def main():
         tracker=tracker,
         db_service=db_service,
         vector_db=vector_db,
-        embedders=embedders
+        embedders=embedder
     )
 
     print("🚀 Server running at http://localhost:8000")
