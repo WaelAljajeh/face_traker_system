@@ -168,49 +168,47 @@ class AttendanceAPIServer:
         ):
             """
             Enroll a person with face image.
-            Extracts embedding and stores it.
+            If person_id already exists, reuse it (no duplicate creation).
             """
-            print("start the enrollment")
             if not db or not recognizer or not embedders:
                 raise HTTPException(500, "Services not ready")
-              
+
             try:
-                # Create person
-                created_person_id = db.create_person(
-                    person_id=int(person_id),
-                    name=name
-                )
-                print(f"created person with id: {created_person_id}")
-                if not created_person_id:
-                    raise HTTPException(500, "Failed to create person")
-                print(f"created person with id: {created_person_id}")    
+                person_id_int = int(person_id)
+
+                # ----- CHECK IF PERSON EXISTS -----
+                existing_person = db.get_person(person_id_int)
+
+                if existing_person:
+                    # Person exists – use the existing person_id
+                    final_person_id = person_id_int
+                    logger.info(f"Person ID {person_id_int} already exists. Adding new face embedding.")
+                else:
+                    # Person does NOT exist – create new
+                    final_person_id = db.create_person(
+                        person_id=person_id_int,
+                        name=name
+                    )
+                    if not final_person_id:
+                        raise HTTPException(500, "Failed to create person")
+                    logger.info(f"Created new person ID {final_person_id}")
 
                 # Read image
                 image_bytes = await file.read()
-                debug_path = f"debug_enroll_{person_id}_{int(time.time())}.jpg"
-                with open(debug_path, "wb") as f:
-                  f.write(image_bytes)
-                print(f"Saved debug image: {debug_path}, size: {len(image_bytes)} bytes")
-    
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-                print(f"Decoded frame shape: {frame.shape if frame is not None else 'None'}")
-             
 
                 if frame is None:
                     raise HTTPException(400, "Invalid image file")
-                print("Face frame good")
 
                 # Extract embedding
                 embedding = embedders.extract_embedding(frame)
                 if embedding is None:
                     raise HTTPException(400, "No face detected in image")
-                print("Embedd frame good")
 
-                # Save embedding
+                # Save embedding (adds new embedding for the person)
                 recognizer.add_embedding(
-                    person_id=str(created_person_id),
+                    person_id=str(final_person_id),
                     embedding=embedding,
                     quality_score=1.0,
                     source="manual_enrollment"
@@ -218,9 +216,9 @@ class AttendanceAPIServer:
 
                 return {
                     "success": True,
-                    "person_id": created_person_id,
+                    "person_id": final_person_id,
                     "name": name,
-                    "message": "Face enrolled successfully"
+                    "message": "Face enrolled successfully" + (" (existing person reused)" if existing_person else "")
                 }
 
             except HTTPException:

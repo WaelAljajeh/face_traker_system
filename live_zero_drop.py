@@ -14,7 +14,6 @@ import time
 import threading
 import queue
 import requests
-import base64
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -84,9 +83,12 @@ counter_lock = threading.Lock()
 KILL_SIGNAL = None
 
 last_scan_time = {}
-last_unknown_time = 0
 SCAN_COOLDOWN_SECONDS = 8
-UNKNOWN_COOLDOWN_SECONDS = 10
+
+# ── DB RELOAD SYNC ──
+db_lock = threading.Lock()
+last_db_reload = time.time()
+DB_RELOAD_INTERVAL = 60  # seconds
 
 
 def send_known(member_id):
@@ -106,21 +108,31 @@ def send_known(member_id):
     return False
 
 
-def send_unknown(image_b64):
-    try:
-        resp = requests.post(
-            f"{SERVER_URL}/scan",
-            json={"member_id": None, "image_base64": image_b64},
-            timeout=SERVER_TIMEOUT
-        )
-        if resp.status_code == 200:
-            print(f"  [SERVER] Unknown face submitted")
+def reload_database():
+    """Reload DB + vector index + recognizer without restarting the script."""
+    global engine, db_service, vector_db, recognizer
+    with db_lock:
+        print("[DB] Reloading database...")
+        try:
+            if engine is not None:
+                engine.dispose()
+
+            engine, SessionLocal = init_database("face_attendance.db")
+            db_service = DatabaseService(SessionLocal)
+            vector_db = FAISSVectorDB(embedding_dim=512)
+
+            recognizer = FaceRecognizer(
+                db_service=db_service,
+                vector_db=vector_db,
+                normalize=True
+            )
+            print(f"[DB] Reloaded. {len(recognizer.database)} embeddings loaded.")
             return True
-        else:
-            print(f"  [SERVER] Error {resp.status_code}: {resp.text}")
-    except Exception as e:
-        print(f"  [SERVER] Failed: {e}")
-    return False
+        except Exception as e:
+            print(f"[DB] Reload failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 def detection_worker():
@@ -148,7 +160,8 @@ def detection_worker():
                 print(f"[WORKER] emb_norm={np.linalg.norm(emb):.4f}")
 
                 # ── RECOGNIZE ──
-                result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
+                with db_lock:
+                    result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
                 print(f"[WORKER] Result: recognized={result.get('recognized') if result else 'N/A'}, score={best_score:.4f}")
 
                 if all_scores:
@@ -158,8 +171,8 @@ def detection_worker():
                 # ── DEBUG: save frame if best score is suspiciously low ──
                 if best_score < 0.3:
                     debug_path = f"debug_low_score_frame_{fid}_{best_score:.3f}.jpg"
-            
                     print(f"[WORKER] 💾 Saved low-score frame: {debug_path}")
+
                 person_id = result.get("person_id") if result else None 
                 name = result.get("name") if result else None
                 confidence = result.get("confidence", 0.0) if result else 0.0
@@ -197,7 +210,7 @@ if not cap.isOpened():
     print(f"Cannot open camera {device_id}")
     sys.exit(1)
 
-print("\nPress 'q' to quit.\n")
+print("\nPress 'q' to quit. Press 'r' to reload DB.\n")
 
 frame_count = 0
 last_status = ""
@@ -251,8 +264,6 @@ while True:
         else:
             detections = []
 
-    frame_b64 = None
-
     if not detections:
         cv2.putText(display, "NO FACE", (20, 40),
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
@@ -260,7 +271,7 @@ while True:
         for det in detections:
             bbox = det["bbox"]
             x1, y1, x2, y2 = map(int, bbox)
-            person_id=det.get("person_id")
+            person_id = det.get("person_id")
             name = det.get("name")
             distance = det.get("distance", 0)
             conf = det.get("confidence", 0)
@@ -279,23 +290,10 @@ while True:
                 else:
                     label += " [COOLDOWN]"
             else:
+                # Unknown face – do NOT send to server, just display
                 color = (0, 165, 255)
                 label = f"? UNKNOWN ({distance:.3f})"
                 status = f"UNKNOWN ({distance:.3f})"
-
-                now = time.time()
-                if now - last_unknown_time > UNKNOWN_COOLDOWN_SECONDS:
-                    last_unknown_time = now
-                    if frame_b64 is None:
-                        _, buf = cv2.imencode('.jpg', frame)
-                        frame_b64 = base64.b64encode(buf).decode('utf-8')
-                    if frame_b64:
-                        threading.Thread(target=send_unknown, args=(frame_b64,), daemon=True).start()
-                        label += " [SENT]"
-                    else:
-                        label += " [NO IMG]"
-                else:
-                    label += " [COOLDOWN]"
 
             cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
             cv2.putText(display, label, (x1, y1 - 10),
@@ -312,10 +310,19 @@ while True:
     cv2.putText(display, f"FPS: {fps_display:.1f} | Frame: {frame_count}",
                 (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
+    # ── PERIODIC DB RELOAD ──
+    if now - last_db_reload > DB_RELOAD_INTERVAL:
+        reload_database()
+        last_db_reload = now
+
     cv2.imshow("Live Camera", display)
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord("q"):
         break
+    elif key == ord("r"):
+        reload_database()
+        last_db_reload = now
 
 # ── SHUTDOWN ──
 frame_queue.put(KILL_SIGNAL)
