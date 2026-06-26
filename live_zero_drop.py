@@ -14,9 +14,7 @@ import time
 import threading
 import queue
 import requests
-import atexit
-import signal
-
+import base64
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,8 +39,8 @@ threshold = recognition_cfg.get("similarity_threshold", 0.45)
 
 # ── CRITICAL: Use full resolution ──
 perf_cfg = config.get_section("performance") or {}
-inference_every_n = perf_cfg.get("inference_every_n_frames", 3)
-frame_scale = 1.0
+inference_every_n = perf_cfg.get("inference_every_n_frames", 2)
+frame_scale = perf_cfg.get("frame_scale", 0.5)
 
 insight_cfg = config.get_section("insightface") or {}
 model_name = insight_cfg.get("model_name", "buffalo_l")
@@ -94,85 +92,10 @@ counter_lock = threading.Lock()
 KILL_SIGNAL = None
 
 last_scan_time = {}
-SCAN_COOLDOWN_SECONDS = 8
+last_unknown_time = 0
+SCAN_COOLDOWN_SECONDS = 8      # Between scans of same known person
+UNKNOWN_COOLDOWN_SECONDS = 10  # Between unknown face submissions
 
-# ── PAUSE / RESUME ──
-paused = False
-PAUSE_CHECK_INTERVAL = 30  # frames between server poll
-cap = None  # Camera handle, release/re-acquire during pause
-
-# ── DB RELOAD SYNC ──
-db_lock = threading.Lock()
-last_db_reload = time.time()
-DB_RELOAD_INTERVAL = 60  # seconds
-session = requests.Session()
-retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[500, 502, 503, 504],
-)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-session.mount("http://", adapter)
-session.mount("https://", adapter)
-
-no_retry_session = requests.Session()
-no_retry_adapter = HTTPAdapter(max_retries=0)
-no_retry_session.mount("http://", no_retry_adapter)
-no_retry_session.mount("https://", no_retry_adapter)
-
-def check_pause_status():
-    """Poll server for camera pause state (fail fast, no retry)."""
-    try:
-        resp = no_retry_session.get(f"{SERVER_URL}/camera/status", timeout=2)
-        if resp.status_code == 200:
-            return resp.json().get("paused", False)
-    except Exception:
-        pass
-    return False
-
-
-def release_camera():
-    global cap
-    if cap is not None and cap.isOpened():
-        cap.release()
-        cap = None
-        print("[CAMERA] Released")
-
-def reopen_camera():
-    global cap
-    release_camera()
-    time.sleep(0.8)
-    try:
-        new_cap = cv2.VideoCapture(device_id, cv2.CAP_FFMPEG)
-    except Exception:
-        new_cap = cv2.VideoCapture(device_id,cv2.CAP_FFMPEG)
-    new_cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
-    new_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
-    new_cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 30))
-    if not new_cap.isOpened():
-        print(f"[CAMERA] Failed to open camera {device_id}")
-        return False
-    for _ in range(5):
-        new_cap.read()
-    cap = new_cap
-    print("[CAMERA] Re-acquired")
-    return True
-
-def shutdown_handler(signum=None, frame=None):
-    print("\n[SHUTDOWN] Received signal, cleaning up...")
-    global KILL_SIGNAL
-    if KILL_SIGNAL is None:
-        KILL_SIGNAL = True
-        frame_queue.put(KILL_SIGNAL)
-        detection_thread.join(timeout=2.0)
-        release_camera()
-        cv2.destroyAllWindows()
-    print("[SHUTDOWN] Done.")
-    sys.exit(0)
-
-atexit.register(shutdown_handler)
-signal.signal(signal.SIGINT, shutdown_handler)
-signal.signal(signal.SIGTERM, shutdown_handler)
 
 def send_known(member_id):
     try:
@@ -191,25 +114,19 @@ def send_known(member_id):
     return False
 
 
-def reload_database():
-    """Reload DB + vector index + recognizer without restarting the script."""
-    global engine, db_service, vector_db, recognizer
-    with db_lock:
-        print("[DB] Reloading database...")
-        try:
-            if engine is not None:
-                engine.dispose()
-
-            engine, SessionLocal = init_database(DB_PATH)
-            db_service = DatabaseService(SessionLocal)
-            vector_db = FAISSVectorDB(embedding_dim=512)
-
-            recognizer = FaceRecognizer(
-                db_service=db_service,
-                vector_db=vector_db,
-                normalize=True
-            )
-            print(f"[DB] Reloaded. {len(recognizer.database)} embeddings loaded.")
+def send_unknown(image_b64):
+    """Send unknown face image to server for later review."""
+    try:
+        resp = requests.post(
+            f"{SERVER_URL}/scan",
+            json={
+                "member_id": None,
+                "image_base64": image_b64
+            },
+            timeout=SERVER_TIMEOUT
+        )
+        if resp.status_code == 200:
+            print(f"  [SERVER] Unknown face submitted for review")
             return True
         except Exception as e:
             print(f"[DB] Reload failed: {e}")
@@ -227,17 +144,20 @@ def detection_worker():
         fid, frame = item
 
         try:
-            detections, _ = detector.detect(frame)
-
+            detections, _ = detector.detect(small_frame)
+            if scale < 1.0:
+                for det in detections:
+                    bbox = det["bbox"]
+                    det["bbox"] = [
+                        float(bbox[0] / scale), float(bbox[1] / scale),
+                        float(bbox[2] / scale), float(bbox[3] / scale),
+                    ]
+            
             for det in detections:
-                emb = det.get("embedding")
-                if emb is None:
-                    det["name"] = None
-                    continue
-
+                emb = det["embedding"]
+                # Use new recognizer.identify() signature
                 result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
-
-                person_id = result.get("person_id") if result else None 
+                
                 name = result.get("name") if result else None
                 confidence = result.get("confidence", 0.0) if result else 0.0
                 det["person_id"] = person_id     
@@ -407,6 +327,7 @@ while True:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             if status != last_status:
+                print(f"[Frame {frame_count}] {status} | conf={conf:.2f}")
                 last_status = status
 
     # FPS
@@ -431,4 +352,8 @@ while True:
         last_db_reload = now
 
 # ── SHUTDOWN ──
-shutdown_handler()
+frame_queue.put(KILL_SIGNAL)
+detection_thread.join(timeout=1.0)
+cap.release()
+cv2.destroyAllWindows()
+print("\nDone.")
