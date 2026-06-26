@@ -1,5 +1,17 @@
+import os
 import yaml
 from typing import Dict, Any
+
+
+def get_appdata_dir(subdir: str = "face_attendance") -> str:
+    """Get a per-user data directory (APPDATA on Windows, ~/.local/share on others)."""
+    if os.name == 'nt':
+        base = os.environ.get('APPDATA', os.path.expanduser('~'))
+    else:
+        base = os.environ.get('XDG_DATA_HOME', os.path.join(os.path.expanduser('~'), '.local', 'share'))
+    data_dir = os.path.join(base, subdir)
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
 
 
 class Config:

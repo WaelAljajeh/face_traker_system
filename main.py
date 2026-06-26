@@ -1,4 +1,5 @@
 import sqlite3
+import os
 from fastapi import FastAPI, WebSocket, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -10,7 +11,9 @@ import numpy as np
 # DATABASE INITIALIZATION
 # ============================================================================
 
-DATABASE_PATH = "attendance.db"
+APP_DATA_DIR = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), "face_attendance")
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+DATABASE_PATH = os.path.join(APP_DATA_DIR, "attendance.db")
 
 def init_database():
     """Initialize SQLite database with required tables."""

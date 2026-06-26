@@ -10,8 +10,10 @@ import threading
 app = Flask(__name__)
 CORS(app)
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans.db")
-FACES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "registered_faces")
+APP_DATA_DIR = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), "face_attendance")
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(APP_DATA_DIR, "scans.db")
+FACES_DIR = os.path.join(APP_DATA_DIR, "registered_faces")
 os.makedirs(FACES_DIR, exist_ok=True)
 
 # =========================

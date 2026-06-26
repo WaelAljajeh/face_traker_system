@@ -42,26 +42,35 @@ class DatabaseService:
     
     # ========== PERSON MANAGEMENT ==========
     
-    def create_person(self, name: str, employee_id: str = None, 
-                     metadata: dict = None) -> Optional[int]:
-        """Create new registered person."""
+    def create_person(
+        self,
+        person_id: int,
+        name: str,
+        metadata: dict = None
+    ) -> Optional[int]:
         try:
             from models.database import Person
-            
+
             session = self.SessionLocal()
+
             person = Person(
+                person_id=person_id,
                 name=name,
-                employee_id=employee_id,
                 is_active=True,
-                metadata=self._dict_to_json(metadata or {})
+                meta_data=self._dict_to_json(metadata or {})
             )
+
             session.add(person)
             session.commit()
-            person_id = person.person_id
+
+            created_person_id = person.person_id
+
             session.close()
-            
-            logger.info(f"[DB] Created person: {name} (ID={person_id})")
-            return person_id
+
+            logger.info(f"[DB] Created person: {name} (ID={created_person_id})")
+
+            return created_person_id
+
         except Exception as e:
             logger.error(f"[DB] Failed to create person: {e}")
             return None
@@ -527,7 +536,28 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"[DB] Failed to get pending scans: {e}")
             return []
-    
+
+    def get_scan_by_id(self, scan_id: str) -> Optional[Dict]:
+        try:
+            from models.database import PendingScan
+            session = self.SessionLocal()
+            record = session.query(PendingScan).filter(PendingScan.id == scan_id).first()
+            if record:
+                result = {
+                    'id': record.id,
+                    'member_id': record.member_id,
+                    'image_base64': record.image_base64,
+                    'timestamp': record.timestamp,
+                }
+                session.close()
+                return result
+
+            session.close()
+            return None
+        except Exception as e:
+            logger.error(f"[DB] Failed to get scan: {e}")
+            return None
+
     def ack_scan(self, scan_id: str) -> bool:
         """Acknowledge and delete a scan."""
         try:

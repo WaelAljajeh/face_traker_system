@@ -1,0 +1,15 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+
+# App data
+appdata/
+
+# Build outputs (for the future)
+build/
+dist/

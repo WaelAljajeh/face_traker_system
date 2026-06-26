@@ -8,7 +8,7 @@
 # ============================================================
 database:
   type: "sqlite"  # Options: "sqlite", "postgresql"
-  path: "./face_attendance.db"
+  path: "APPDATA/face_attendance.db"
 
   # PostgreSQL (uncomment for production)
   # type: "postgresql"
@@ -33,7 +33,7 @@ insightface:
 # CAMERA CONFIGURATION
 # ============================================================
 camera:
-  source: 2
+  source: "rtsp://admin:123456@192.168.1.188:554/ch01.264/suptype=0&tcp"
   width: 640
   height: 480
   fps: 15 
@@ -146,10 +146,10 @@ performance:
   db_threads: 2
   batch_detection: false
   batch_size: 4
-  max_memory_mb: 2048
+  max_memory_mb: 1024
   garbage_collection_interval: 60
   inference_every_n_frames: 3   # Only detect every 3rd frame
-  frame_scale: 0.5 
+  frame_scale: 0.75  # Scale factor for input frames (e.g., 0.5 for half size) 
 
 # ============================================================
 # SECURITY

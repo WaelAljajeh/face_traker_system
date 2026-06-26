@@ -283,7 +283,13 @@ except ImportError:
 # DATABASE INITIALIZATION
 # ============================================================
 
-def init_database(db_path: str = "face_attendance.db", echo: bool = False):
+def init_database(db_path: str = None, echo: bool = False):
+    if db_path is None:
+        import os
+        appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+        db_dir = os.path.join(appdata, 'face_attendance')
+        os.makedirs(db_dir, exist_ok=True)
+        db_path = os.path.join(db_dir, "face_attendance.db")
     """
     Initialize database with schema.
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Live Camera + Flask Server Client
-================================================================
-Full-resolution detection + direct embedding usage.
-No frame scaling, no double-detection on tight crops.
+==================================
+Optimised for ONVIF/IP cameras (RTSP/HTTP) with frame scaling,
+low latency (buffersize=1), auto-reconnect, and server integration.
 """
 
 import sys
@@ -39,13 +39,13 @@ config = Config.load("config.yaml")
 recognition_cfg = config.get_section("recognition")
 threshold = recognition_cfg.get("similarity_threshold", 0.45)
 
-# ── CRITICAL: Use full resolution ──
+# ── PERFORMANCE: Smaller det_size + skip frames ──
 perf_cfg = config.get_section("performance") or {}
 inference_every_n = perf_cfg.get("inference_every_n_frames", 3)
-frame_scale = 1.0
+frame_scale = perf_cfg.get("frame_scale", 0.75)
 
 insight_cfg = config.get_section("insightface") or {}
-model_name = insight_cfg.get("model_name", "buffalo_l")
+model_name = "buffalo_s"
 
 # ── SERVER CONFIG ──
 server_cfg = config.get_section("server") or {}
@@ -62,9 +62,9 @@ vector_db = FAISSVectorDB(embedding_dim=512)
 
 # ── INITIALIZE AI MODELS ──
 detector = FaceDetector(
-    model_name='buffalo_l',
-    det_size=(640, 640),
-    det_thresh=0.5,           # must match enrollment
+    model_name=model_name,
+    det_size=(320, 320),
+    det_thresh=0.5,
     confidence_threshold=0.5,
 )
 
@@ -78,6 +78,7 @@ camera_cfg = config.get_section("camera")
 device_id = camera_cfg.get("source", 0)
 
 print(f"Camera: {device_id} | Model: {model_name} | Threshold: {threshold}")
+print(f"det_size: 320x320 | frame_skip: {inference_every_n} | model: {model_name}")
 print(f"Server: {SERVER_URL}")
 print(f"DB: Loaded {len(recognizer.database)} embeddings")
 
@@ -87,11 +88,14 @@ print(f"DB: Loaded {len(recognizer.database)} embeddings")
 
 frame_queue = queue.Queue(maxsize=2)
 result_queue = queue.Queue()
+capture_queue = queue.Queue(maxsize=1)
 latest_results = {}
 results_lock = threading.Lock()
+capture_lock = threading.Lock()
 frame_counter = 0
 counter_lock = threading.Lock()
 KILL_SIGNAL = None
+CAPTURE_KILL = threading.Event()
 
 last_scan_time = {}
 SCAN_COOLDOWN_SECONDS = 8
@@ -142,29 +146,61 @@ def reopen_camera():
     global cap
     release_camera()
     time.sleep(0.8)
+    # --- IP CAMERA OPTIMISATION: do not use CAP_DSHOW for network streams ---
     try:
+        # On Windows, CAP_DSHOW may fail for RTSP; fallback to default (FFMPEG)
         new_cap = cv2.VideoCapture(device_id, cv2.CAP_FFMPEG)
     except Exception:
-        new_cap = cv2.VideoCapture(device_id,cv2.CAP_FFMPEG)
+        new_cap = cv2.VideoCapture(device_id)
     new_cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
     new_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
-    new_cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 30))
+    new_cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 15))
+    # --- CRITICAL: reduce internal buffer to cut latency ---
+    new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not new_cap.isOpened():
         print(f"[CAMERA] Failed to open camera {device_id}")
         return False
+    # warmup
     for _ in range(5):
         new_cap.read()
     cap = new_cap
     print("[CAMERA] Re-acquired")
     return True
 
+def capture_worker():
+    """Dedicated capture thread: reads ONVIF/RTSP frames without blocking display."""
+    while not CAPTURE_KILL.is_set():
+        if cap is None or not cap.isOpened():
+            CAPTURE_KILL.wait(0.05)
+            continue
+        try:
+            ret, frame = cap.read()
+        except Exception:
+            CAPTURE_KILL.wait(0.05)
+            continue
+        if not ret:
+            CAPTURE_KILL.wait(0.05)
+            continue
+        with capture_lock:
+            while not capture_queue.empty():
+                try:
+                    capture_queue.get_nowait()
+                except queue.Empty:
+                    break
+            try:
+                capture_queue.put_nowait(frame)
+            except queue.Full:
+                pass
+
 def shutdown_handler(signum=None, frame=None):
     print("\n[SHUTDOWN] Received signal, cleaning up...")
     global KILL_SIGNAL
     if KILL_SIGNAL is None:
         KILL_SIGNAL = True
+        CAPTURE_KILL.set()
         frame_queue.put(KILL_SIGNAL)
         detection_thread.join(timeout=2.0)
+        capture_thread.join(timeout=2.0)
         release_camera()
         cv2.destroyAllWindows()
     print("[SHUTDOWN] Done.")
@@ -219,7 +255,7 @@ def reload_database():
 
 
 def detection_worker():
-    """Background thread: runs AI on full-resolution frames."""
+    """Background thread: runs AI on frames."""
     while True:
         item = frame_queue.get()
         if item is KILL_SIGNAL:
@@ -262,17 +298,30 @@ detection_thread = threading.Thread(target=detection_worker, daemon=True)
 detection_thread.start()
 
 # ─────────────────────────────────────────────────────────────
-# MAIN LOOP
+# CAPTURE THREAD
 # ─────────────────────────────────────────────────────────────
 
-cap = cv2.VideoCapture(device_id,cv2.CAP_FFMPEG)
+# --- IP CAMERA: initialise with low buffering and appropriate backend ---
+try:
+    cap = cv2.VideoCapture(device_id, cv2.CAP_FFMPEG)
+except Exception:
+    cap = cv2.VideoCapture(device_id)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
-cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 30))
+cap.set(cv2.CAP_PROP_FPS, 15)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # <--- reduces lag
 
 if not cap or not cap.isOpened():
     print(f"Cannot open camera {device_id}")
     sys.exit(1)
+
+capture_thread = threading.Thread(target=capture_worker, daemon=True)
+capture_thread.start()
+time.sleep(0.5)  # let capture buffer fill
+
+# ─────────────────────────────────────────────────────────────
+# MAIN LOOP
+# ─────────────────────────────────────────────────────────────
 
 print("\nPress 'q' to quit. Press 'r' to reload DB.\n")
 
@@ -326,8 +375,10 @@ while True:
             break
         continue
 
-    ret, frame = cap.read()
-    if not ret:
+    try:
+        frame = capture_queue.get_nowait()
+    except queue.Empty:
+        cv2.waitKey(5)
         continue
 
     h, w = frame.shape[:2]

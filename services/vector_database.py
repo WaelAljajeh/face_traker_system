@@ -48,6 +48,8 @@ class FAISSVectorDB:
         self.index_type = index_type
         self.metric = metric
         self.lock = threading.Lock()
+        # Add this list in __init__ to store all vectors
+        self.all_embeddings = []   # each element: (internal_id, embedding_array)
         
         # Initialize index
         if index_type == 'flat':
@@ -101,7 +103,7 @@ class FAISSVectorDB:
             
             internal_id = self.next_id
             self.next_id += 1
-            
+            self.all_embeddings.append((internal_id, embedding.copy()))
             # Store metadata
             self.id_to_person[internal_id] = person_id
             self.id_to_metadata[internal_id] = {
@@ -267,39 +269,54 @@ class FAISSVectorDB:
             return results
     
     def remove(self, internal_id: int) -> bool:
-        """Remove embedding by internal ID (rebuild index)."""
+        """
+        Remove embedding by internal ID. Rebuilds index without that ID.
+        """
         with self.lock:
             if internal_id not in self.id_to_person:
                 return False
             
-            # FAISS doesn't support removal, so rebuild index
+            # Remove from metadata
             del self.id_to_person[internal_id]
             del self.id_to_metadata[internal_id]
             
-            # Rebuild index
+            # Rebuild index from remaining embeddings
             self._rebuild_index()
             return True
-    
+
     def _rebuild_index(self):
-        """Rebuild index from remaining embeddings."""
-        # This is a placeholder - in production, use FAISS's IndexIDMap
-        # or maintain a separate persistent storage
-        logger.debug("[FAISS] Index rebuild needed (not optimized)")
-    
+        """Rebuild FAISS index from all stored embeddings."""
+        if self.index.ntotal == 0:
+            return
+        
+        # Filter out removed ones
+        remaining = [(eid, emb) for eid, emb in self.all_embeddings if eid in self.id_to_person]
+        
+        # Create new index
+        new_index = self.faiss.IndexFlatL2(self.embedding_dim)
+        if remaining:
+            vectors = np.array([emb for _, emb in remaining], dtype=np.float32)
+            new_index.add(vectors)
+        
+        # Replace old index
+        self.index = new_index
+        self.all_embeddings = remaining
+
     def clear(self):
         """Clear all embeddings."""
         with self.lock:
             self.id_to_person.clear()
             self.id_to_metadata.clear()
             self.next_id = 0
+            self.all_embeddings.clear()
             
             # Reinitialize index
             if self.index_type == 'flat':
-                if self.metric == 'cosine':
-                    self.index = self.faiss.IndexFlatL2(self.embedding_dim)
-                else:
-                    self.index = self.faiss.IndexFlatL2(self.embedding_dim)
-    
+                self.index = self.faiss.IndexFlatL2(self.embedding_dim)
+            elif self.index_type == 'ivf':
+                quantizer = self.faiss.IndexFlatL2(self.embedding_dim)
+                self.index = self.faiss.IndexIVFFlat(quantizer, self.embedding_dim, 100)
+
     def save(self, index_path: str, metadata_path: str):
         """Save index and metadata to disk."""
         with self.lock:
@@ -317,7 +334,7 @@ class FAISSVectorDB:
                 pickle.dump(metadata, f)
             
             logger.info(f"[FAISS] Saved index to {index_path}")
-    
+
     def load(self, index_path: str, metadata_path: str):
         """Load index and metadata from disk."""
         with self.lock:
@@ -335,7 +352,6 @@ class FAISSVectorDB:
                 return True
             
             return False
-    
     def get_stats(self) -> dict:
         """Get index statistics."""
         with self.lock:
@@ -345,3 +361,4 @@ class FAISSVectorDB:
                 'index_type': self.index_type,
                 'metric': self.metric,
             }
+

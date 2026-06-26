@@ -101,35 +101,30 @@ class CameraReader:
         return None
     
     def _reader_loop(self):
-        """Main camera reader loop with reconnection logic."""
+        """Main camera reader loop with infinite reconnection."""
         cap = None
-        reconnect_attempts = 0
-        last_reconnect = time.time()
-        
+        reconnect_delay = 1.0
+        max_reconnect_delay = 30.0
+    
         while self.running:
             try:
                 # Open camera if not connected
                 if cap is None:
                     cap = cv2.VideoCapture(self.device_id if isinstance(self.device_id, int) 
                                           else str(self.device_id))
-                    
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                     cap.set(cv2.CAP_PROP_FPS, self.fps)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    # Force minimum frame interval
-                    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-                    cap.set(cv2.CAP_PROP_SETTINGS, 0)
                     
                     if not cap.isOpened():
                         raise RuntimeError("Cannot open camera")
                     
                     self.connected = True
-                    reconnect_attempts = 0
+                    reconnect_delay = 1.0  # reset delay on successful connect
                     logger.info(f"[CAMERA] Connected to {self.device_id}")
                 
-                # Read frame with timing
-                frame_start = time.perf_counter()
+                # Read frame
                 ret, frame = cap.read()
                 if not ret:
                     raise RuntimeError("Failed to read frame")
@@ -144,32 +139,20 @@ class CameraReader:
                 except queue.Full:
                     self.drop_count += 1
                 
-                # Frame delay - enforce strict timing
-                elapsed = time.perf_counter() - frame_start
-                sleep_time = max(0.001, self.frame_delay - elapsed)  # min 1ms
-                time.sleep(sleep_time)
+                # Sleep to maintain FPS
+                time.sleep(self.frame_delay)
                 
             except Exception as e:
                 logger.error(f"[CAMERA] Error: {e}")
-                
                 if cap:
                     cap.release()
                     cap = None
-                
                 self.connected = False
                 
-                # Reconnection logic
-                if reconnect_attempts < self.reconnect_max_attempts:
-                    reconnect_attempts += 1
-                    logger.info(f"[CAMERA] Reconnecting (attempt {reconnect_attempts}/{self.reconnect_max_attempts})...")
-                    time.sleep(self.reconnect_timeout)
-                else:
-                    logger.error("[CAMERA] Max reconnection attempts reached, stopping")
-                    self.running = False
-        
-        if cap:
-            cap.release()
-        logger.info("[CAMERA] Reader loop ended")
+                # Exponential backoff reconnect
+                logger.info(f"[CAMERA] Reconnecting in {reconnect_delay:.1f}s...")
+                time.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 1.5, max_reconnect_delay)
     
     def get_stats(self) -> dict:
         """Get camera statistics."""

@@ -1,6 +1,8 @@
 import logging
-
+import os
+import sys
 from services.api_server import AttendanceAPIServer
+from utils.config import get_appdata_dir
 
 from core.detector import FaceDetector
 from core.recognizer import FaceRecognizer
@@ -23,13 +25,17 @@ def main():
             "port": 8000
         }
     }
-
+    DB_PATH = os.path.join(get_appdata_dir(), "face_attendance.db")
     # ===================== INIT DATABASE ENGINE =====================
-    engine, SessionLocal = init_database("face_attendance.db")
+    engine, SessionLocal = init_database(DB_PATH)
 
     # ===================== AI =====================
     # Initialize embedder with InsightFace model
-    embedders = FaceEmbedder(model=None)  # Auto-loads InsightFace
+    embedder = FaceEmbedder(
+    model_name='buffalo_l',
+    det_size=(640, 640),
+    det_thresh=0.5,
+)  # Auto-loads InsightFace
     
     detector = FaceDetector()
     db_service = DatabaseService(SessionLocal)
@@ -56,7 +62,7 @@ def main():
         tracker=tracker,
         db_service=db_service,
         vector_db=vector_db,
-        embedders=embedders
+        embedders=embedder
     )
 
     print("🚀 Server running at http://localhost:8000")

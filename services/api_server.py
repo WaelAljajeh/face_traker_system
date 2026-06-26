@@ -41,8 +41,11 @@ class AckRequest(BaseModel):
 # ============================================================
 
 def get_db():
-    import sqlite3
-    conn = sqlite3.connect("face_attendance.db")
+    import sqlite3, os
+    appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+    db_dir = os.path.join(appdata, 'face_attendance')
+    os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(db_dir, "face_attendance.db"))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -74,12 +77,13 @@ class AttendanceAPIServer:
         self.vector_db = vector_db
         self.db_service = db_service
 
+        self.camera_paused = threading.Event()
         self.app = FastAPI(title="Face Attendance API", version="1.0.0")
 
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
+            allow_origin_regex=r"https://.*\.vercel\.app",
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -162,40 +166,53 @@ class AttendanceAPIServer:
         # ================= ENROLLMENT =================
         @self.app.post("/api/enrollment/manual")
         async def enroll(
-            person_id: str = Form(None),
+            person_id: str = Form(...),
             name: str = Form(...),
             file: UploadFile = File(...)
         ):
             """
             Enroll a person with face image.
-            Extracts embedding and stores it.
+            If person_id already exists, reuse it (no duplicate creation).
             """
             if not db or not recognizer or not embedders:
                 raise HTTPException(500, "Services not ready")
 
             try:
-                # Create person if person_id not provided
-                if not person_id:
-                    person_id = db.create_person(name=name)
-                    if not person_id:
+                person_id_int = int(person_id)
+
+                # ----- CHECK IF PERSON EXISTS -----
+                existing_person = db.get_person(person_id_int)
+
+                if existing_person:
+                    # Person exists – use the existing person_id
+                    final_person_id = person_id_int
+                    logger.info(f"Person ID {person_id_int} already exists. Adding new face embedding.")
+                else:
+                    # Person does NOT exist – create new
+                    final_person_id = db.create_person(
+                        person_id=person_id_int,
+                        name=name
+                    )
+                    if not final_person_id:
                         raise HTTPException(500, "Failed to create person")
-                
+                    logger.info(f"Created new person ID {final_person_id}")
+
                 # Read image
                 image_bytes = await file.read()
                 nparr = np.frombuffer(image_bytes, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
+
                 if frame is None:
                     raise HTTPException(400, "Invalid image file")
 
-                # Extract embedding using embedder
+                # Extract embedding
                 embedding = embedders.extract_embedding(frame)
                 if embedding is None:
                     raise HTTPException(400, "No face detected in image")
 
-                # Save embedding via recognizer (syncs to DB and FAISS)
+                # Save embedding (adds new embedding for the person)
                 recognizer.add_embedding(
-                    person_id=str(person_id),
+                    person_id=str(final_person_id),
                     embedding=embedding,
                     quality_score=1.0,
                     source="manual_enrollment"
@@ -203,11 +220,11 @@ class AttendanceAPIServer:
 
                 return {
                     "success": True,
-                    "person_id": person_id,
+                    "person_id": final_person_id,
                     "name": name,
-                    "message": "Face enrolled successfully"
+                    "message": "Face enrolled successfully" + (" (existing person reused)" if existing_person else "")
                 }
-            
+
             except HTTPException:
                 raise
             except Exception as e:
@@ -283,7 +300,8 @@ class AttendanceAPIServer:
                 scan_id = str(uuid.uuid4())
                 timestamp = time.time()
                 
-                # Store scan event
+                # Store scan 
+                # event
                 success = db.add_scan(
                     scan_id=scan_id,
                     member_id=request.member_id,
@@ -412,26 +430,26 @@ class AttendanceAPIServer:
         # ================= ACKNOWLEDGE SCAN (Flutter acks after processing) =================
         @self.app.post("/ack")
         async def ack_scan(request: AckRequest):
-            """
-            Flutter acknowledges a scan after processing.
-            Removes the scan from pending queue.
-            """
             if not db:
                 raise HTTPException(500, "DB not available")
 
             try:
-                success = db.ack_scan(request.scan_id)
+                # First, retrieve the scan to get image path
+                # We need a method in db_service to get scan by id
+                scan = db.get_scan_by_id(request.scan_id)  # implement this
+                if scan and scan.get('image_path'):
+                    try:
+                        os.remove(scan['image_path'])
+                        logger.info(f"[API] Deleted image {scan['image_path']}")
+                    except Exception as e:
+                        logger.warning(f"[API] Could not delete image: {e}")
                 
+                success = db.ack_scan(request.scan_id)
                 if not success:
                     raise HTTPException(500, "Failed to acknowledge scan")
                 
                 logger.info(f"✅ ACK for {request.scan_id}")
-                
-                return {
-                    "success": True,
-                    "scan_id": request.scan_id
-                }
-            
+                return {"success": True, "scan_id": request.scan_id}
             except HTTPException:
                 raise
             except Exception as e:
@@ -484,6 +502,21 @@ class AttendanceAPIServer:
                 "scan_id": scan_id,
                 "success": success
             }
+        @self.app.post("/camera/pause")
+        async def pause_camera():
+            """Tell Python to release the camera and pause recognition."""
+            self.camera_paused.set()
+            return {"success": True, "message": "Camera paused for Flutter"}
+        @self.app.post("/camera/resume")
+        async def resume_camera():
+            """Tell Python to reacquire the camera and resume recognition."""
+            self.camera_paused.clear()
+            return {"success": True, "message": "Camera resumed"}
+
+        @self.app.get("/camera/status")
+        async def camera_status():
+            """Get current camera pause status."""
+            return {"paused": self.camera_paused.is_set()}
 
     # ========================================================
     # BACKGROUND CLEANUP TASK
@@ -503,6 +536,9 @@ class AttendanceAPIServer:
         
         thread = threading.Thread(target=cleanup_loop, daemon=True)
         thread.start()
+     
+
+
 
     # ========================================================
     # RUN SERVER
