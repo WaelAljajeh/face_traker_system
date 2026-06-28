@@ -33,7 +33,7 @@ insightface:
 # CAMERA CONFIGURATION
 # ============================================================
 camera:
-  source: "rtsp://admin:123456@192.168.1.188:554/ch01.264/suptype=0&tcp"
+  source: "rtsp://admin:123456@192.168.1.188:554/ch01_sub.264/suptype=0&tcp"
   width: 640
   height: 480
   fps: 15 

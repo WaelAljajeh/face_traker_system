@@ -45,7 +45,7 @@ inference_every_n = perf_cfg.get("inference_every_n_frames", 3)
 frame_scale = perf_cfg.get("frame_scale", 0.75)
 
 insight_cfg = config.get_section("insightface") or {}
-model_name = "buffalo_s"
+model_name = "buffalo_l"
 
 # ── SERVER CONFIG ──
 server_cfg = config.get_section("server") or {}
@@ -63,7 +63,7 @@ vector_db = FAISSVectorDB(embedding_dim=512)
 # ── INITIALIZE AI MODELS ──
 detector = FaceDetector(
     model_name=model_name,
-    det_size=(320, 320),
+    det_size=(640, 640),
     det_thresh=0.5,
     confidence_threshold=0.5,
 )
@@ -78,7 +78,7 @@ camera_cfg = config.get_section("camera")
 device_id = camera_cfg.get("source", 0)
 
 print(f"Camera: {device_id} | Model: {model_name} | Threshold: {threshold}")
-print(f"det_size: 320x320 | frame_skip: {inference_every_n} | model: {model_name}")
+print(f"det_size: 640x640 | frame_skip: {inference_every_n} | model: {model_name}")
 print(f"Server: {SERVER_URL}")
 print(f"DB: Loaded {len(recognizer.database)} embeddings")
 
@@ -100,15 +100,17 @@ CAPTURE_KILL = threading.Event()
 last_scan_time = {}
 SCAN_COOLDOWN_SECONDS = 8
 
-# ── PAUSE / RESUME ──
+# ── PAUSE / RESUME (handled by background thread) ──
 paused = False
-PAUSE_CHECK_INTERVAL = 30  # frames between server poll
-cap = None  # Camera handle, release/re-acquire during pause
+_pause_mutex = threading.Lock()
+cap = None 
+capture_thread = None # Camera handle, release/re-acquire during pause
 
 # ── DB RELOAD SYNC ──
 db_lock = threading.Lock()
 last_db_reload = time.time()
 DB_RELOAD_INTERVAL = 60  # seconds
+_reload_requested = False
 session = requests.Session()
 retry_strategy = Retry(
     total=3,
@@ -124,15 +126,42 @@ no_retry_adapter = HTTPAdapter(max_retries=0)
 no_retry_session.mount("http://", no_retry_adapter)
 no_retry_session.mount("https://", no_retry_adapter)
 
-def check_pause_status():
-    """Poll server for camera pause state (fail fast, no retry)."""
-    try:
-        resp = no_retry_session.get(f"{SERVER_URL}/camera/status", timeout=2)
-        if resp.status_code == 200:
-            return resp.json().get("paused", False)
-    except Exception:
-        pass
-    return False
+def pause_status_worker():
+    """Background thread: polls server for camera pause state without blocking the main loop."""
+    while not CAPTURE_KILL.is_set():
+        try:
+            resp = no_retry_session.get(f"{SERVER_URL}/camera/status", timeout=2)
+            new_paused = resp.status_code == 200 and resp.json().get("paused", False)
+            with _pause_mutex:
+                global paused
+                if new_paused != paused:
+                    paused = new_paused
+                    if paused:
+                        release_camera()
+                        print("[PAUSE] Camera released")
+                    else:
+                        if reopen_camera():
+                            print("[PAUSE] Camera resumed")
+                            try:
+                                while True:
+                                    frame_queue.get_nowait()
+                                    frame_queue.task_done()
+                            except queue.Empty:
+                                pass
+                            try:
+                                while True:
+                                    result_queue.get_nowait()
+                                    result_queue.task_done()
+                            except queue.Empty:
+                                pass
+                            with results_lock:
+                                latest_results.clear()
+                        else:
+                            print("[PAUSE] Failed to re-acquire camera")
+                            paused = True
+        except Exception:
+            pass
+        CAPTURE_KILL.wait(3)
 
 
 def release_camera():
@@ -157,6 +186,8 @@ def reopen_camera():
     new_cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 15))
     # --- CRITICAL: reduce internal buffer to cut latency ---
     new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    new_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
+    new_cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
     if not new_cap.isOpened():
         print(f"[CAMERA] Failed to open camera {device_id}")
         return False
@@ -200,7 +231,8 @@ def shutdown_handler(signum=None, frame=None):
         CAPTURE_KILL.set()
         frame_queue.put(KILL_SIGNAL)
         detection_thread.join(timeout=2.0)
-        capture_thread.join(timeout=2.0)
+        if capture_thread is not None:
+         capture_thread.join(timeout=2.0)
         release_camera()
         cv2.destroyAllWindows()
     print("[SHUTDOWN] Done.")
@@ -297,6 +329,9 @@ def detection_worker():
 detection_thread = threading.Thread(target=detection_worker, daemon=True)
 detection_thread.start()
 
+pause_thread = threading.Thread(target=pause_status_worker, daemon=True)
+pause_thread.start()
+
 # ─────────────────────────────────────────────────────────────
 # CAPTURE THREAD
 # ─────────────────────────────────────────────────────────────
@@ -310,6 +345,8 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
 cap.set(cv2.CAP_PROP_FPS, 15)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # <--- reduces lag
+cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
+cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
 
 if not cap or not cap.isOpened():
     print(f"Cannot open camera {device_id}")
@@ -329,41 +366,15 @@ frame_count = 0
 last_status = ""
 last_display_time = time.time()
 fps_display = 0
-paused = False
-
 while True:
     frame_count += 1
 
-    # ── CHECK PAUSE STATUS ──
-    if frame_count % PAUSE_CHECK_INTERVAL == 0 or paused:
-        was_paused = paused
-        paused = check_pause_status()
-        if paused and not was_paused:
-            release_camera()
-            print("[PAUSE] Camera released")
-        elif not paused and was_paused:
-            if reopen_camera():
-                print("[PAUSE] Camera resumed")
-                try:
-                    while True:
-                        frame_queue.get_nowait()
-                        frame_queue.task_done()
-                except queue.Empty:
-                    pass
-                try:
-                    while True:
-                        result_queue.get_nowait()
-                        result_queue.task_done()
-                except queue.Empty:
-                    pass
-                with results_lock:
-                    latest_results.clear()
-            else:
-                print("[PAUSE] Failed to re-acquire camera")
-                paused = True
+    # ── CHECK PAUSE STATUS (set by background thread) ──
+    with _pause_mutex:
+        is_paused = paused
 
     # ── WHEN PAUSED ──
-    if paused:
+    if is_paused:
         pause_frame = np.zeros((camera_cfg.get("height", 480), camera_cfg.get("width", 640), 3), dtype=np.uint8)
         cv2.putText(pause_frame, "PAUSED", (200, 240),
                     cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
@@ -390,12 +401,12 @@ while True:
             frame_counter += 1
 
         try:
-            frame_queue.put_nowait((current_fid, frame.copy()))
+            frame_queue.put_nowait((current_fid, frame))
         except queue.Full:
             try:
                 frame_queue.get_nowait()
                 frame_queue.task_done()
-                frame_queue.put_nowait((current_fid, frame.copy()))
+                frame_queue.put_nowait((current_fid, frame))
             except queue.Empty:
                 pass
 
@@ -467,10 +478,13 @@ while True:
     cv2.putText(display, f"FPS: {fps_display:.1f} | Frame: {frame_count}",
                 (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-    # ── PERIODIC DB RELOAD ──
+    # ── PERIODIC DB RELOAD (triggered in background thread) ──
     if now - last_db_reload > DB_RELOAD_INTERVAL:
-        reload_database()
+        _reload_requested = True
         last_db_reload = now
+    if _reload_requested:
+        _reload_requested = False
+        threading.Thread(target=reload_database, daemon=True).start()
 
     cv2.imshow("Live Camera", display)
 
@@ -478,8 +492,8 @@ while True:
     if key == ord("q"):
         break
     elif key == ord("r"):
-        reload_database()
-        last_db_reload = now
+        print("[DB] Manual reload requested")
+        threading.Thread(target=reload_database, daemon=True).start()
 
 # ── SHUTDOWN ──
 shutdown_handler()
