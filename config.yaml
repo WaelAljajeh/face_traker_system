@@ -23,24 +23,24 @@ database:
 # INSIGHTFACE CONFIGURATION
 # ============================================================
 insightface:
-  model_name: "buffalo_s"
+  model_name: "buffalo_l"
   providers:
     - "CPUExecutionProvider"   # Force CPU (client has no GPU)
-  det_size: [256, 256] 
-  det_threshold: 0.70
+  det_size: [1280, 1280]      # Increased to detect smaller/distant faces
+  det_threshold: 0.45         # Lowered to catch more candidates
 
 # ============================================================
 # CAMERA CONFIGURATION
 # ============================================================
 camera:
-  source: "rtsp://admin:123456@192.168.1.188:554/ch01_sub.264/suptype=0&tcp"
-  width: 640
-  height: 480
-  fps: 15 
+  source: "rtsp://admin:123456@192.168.3.188:554/ch01_sub.264/suptype=0&tcp"
+  width: 1920
+  height: 1080
+  fps: 10
   frame_skip: 1
-  exposure: -5
-  brightness: 0
-  contrast: 0
+  exposure: 0                 # Auto exposure (was -5)
+  brightness: 10              # Slight boost
+  contrast: 10                # Slight boost
   reconnect_attempts: 5
   reconnect_delay: 2
 
@@ -49,16 +49,16 @@ camera:
 # ============================================================
 quality_filter:
   blur_detection: true
-  blur_threshold: 100.0
+  blur_threshold: 40.0        # More permissive (was 60)
   pose_filtering: true
-  max_yaw: 45
-  max_pitch: 35
-  max_roll: 30
+  max_yaw: 80                 # Wider tolerance (was 70)
+  max_pitch: 60               # Wider tolerance (was 50)
+  max_roll: 60                # Wider tolerance (was 45)
   brightness_filtering: true
-  min_brightness: 30
-  max_brightness: 220
-  min_face_size: 50
-  occlusion_filtering: true
+  min_brightness: 5           # Allow darker faces (was 10)
+  max_brightness: 245         # Slightly increased
+  min_face_size: 15           # Detect smaller faces (was 20)
+  occlusion_filtering: false
   max_occlusion_ratio: 0.20
 
 # ============================================================
@@ -68,7 +68,7 @@ tracking:
   max_age: 30
   min_frames: 3
   iou_threshold: 0.5
-  high_conf_threshold: 0.6
+  high_conf_threshold: 0.9
   embedding_buffer_size: 30
   max_tracks: 100
 
@@ -78,10 +78,10 @@ tracking:
 recognition:
   faiss_index_type: "flat"
   faiss_metric: "cosine"
-  similarity_threshold: 0.50
-  recognition_threshold: 0.60
-  embedding_buffer_per_track: 10
-  temporal_confidence_weight: 0.6
+  similarity_threshold: 0.40      # Lowered from 0.45
+  recognition_threshold: 0.45     # Lowered from 0.50
+  embedding_buffer_per_track: 25  # Increased from 15 for better temporal averaging
+  temporal_confidence_weight: 0.8
 
 # ============================================================
 # ENROLLMENT & UNKNOWN CANDIDATES
@@ -89,11 +89,11 @@ recognition:
 enrollment:
   enabled: true
   unknown_dir: "./unknown_faces"
-  min_quality_for_enrollment: 0.70
-  enrollment_threshold: 0.65
+  min_quality_for_enrollment: 0.55        # Lowered from 0.70
+  enrollment_threshold: 0.55              # Lowered from 0.65
   merge_threshold: 0.75
-  min_samples_for_enrollment: 5
-  min_avg_quality_for_enrollment: 0.75
+  min_samples_for_enrollment: 3           # Reduced from 5
+  min_avg_quality_for_enrollment: 0.65    # Lowered from 0.75
   ignore_expiry_days: 30
 
 # ============================================================
@@ -136,20 +136,20 @@ logging:
 # PERFORMANCE OPTIMIZATION
 # ============================================================
 performance:
-  use_gpu: true
+  use_gpu: false
   gpu_device: 0
   enable_embedding_cache: true
   cache_size: 1000
-  detector_threads: 2
+  detector_threads: 4          # Increased from 2 (if CPU cores available)
   tracker_threads: 1
-  recognition_threads: 2
+  recognition_threads: 4       # Increased from 2
   db_threads: 2
   batch_detection: false
   batch_size: 4
   max_memory_mb: 1024
   garbage_collection_interval: 60
-  inference_every_n_frames: 3   # Only detect every 3rd frame
-  frame_scale: 0.75  # Scale factor for input frames (e.g., 0.5 for half size) 
+  inference_every_n_frames: 1  # Process every frame (was 2)
+  frame_scale: 1.0             # Keep full resolution
 
 # ============================================================
 # SECURITY
@@ -195,3 +195,14 @@ features:
   matched_face_color: [0, 255, 0]
   unknown_face_color: [0, 165, 255]
   low_quality_color: [0, 0, 255]
+
+  # ============================================================
+  # ONVIF (camera control)
+  # ============================================================
+  onvif:
+    enabled: true
+    ip: "192.168.1.188"
+    port: 80
+    username: "admin"
+    password: "123456"
+    wsdl_dir: "./wsdl"

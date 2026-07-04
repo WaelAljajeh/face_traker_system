@@ -113,4 +113,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=['onnxruntime*.dll', 'onnxruntime_providers*.dll'],
     name='FaceAttendanceAPI',
-)
+) 

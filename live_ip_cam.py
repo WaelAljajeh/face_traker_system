@@ -4,6 +4,8 @@ Live Camera + Flask Server Client
 ==================================
 Optimised for ONVIF/IP cameras (RTSP/HTTP) with frame scaling,
 low latency (buffersize=1), auto-reconnect, and server integration.
+Now with ONVIF two‑way audio: plays a 5‑second beep through the camera speaker
+when a known person is detected.
 """
 
 import sys
@@ -16,10 +18,176 @@ import queue
 import requests
 import atexit
 import signal
+import subprocess
+import tempfile
+import wave
 
+# ── ONVIF audio player class (embedded) ─────────────────────────
+try:
+    from onvif import ONVIFCamera
+    from onvif.exceptions import ONVIFError
+    ONVIF_AVAILABLE = True
+except ImportError:
+    ONVIF_AVAILABLE = False
+    print("[WARN] onvif-zeep not installed. Install with: pip install onvif-zeep")
 
+class ONVIFAudioPlayer:
+    """
+    Plays a beep through the camera's speaker using ONVIF two‑way audio.
+    Generates the tone in memory and streams it via ffmpeg.
+    """
+    def __init__(self, ip, port=80, user="admin", password="admin", wsdl_dir="./wsdl"):
+        self.ip = ip
+        self.port = port
+        self.user = user
+        self.password = password
+        self.wsdl_dir = wsdl_dir
+
+        self.camera = None
+        self.media = None
+        self.profile_token = None
+        self.backchannel_uri = None
+        self.sample_rate = 8000      # G.711 requires 8 kHz
+        self.codec = 'pcm_alaw'      # G.711A (try 'pcm_mulaw' if needed)
+
+        self._initialized = False
+        self._ffmpeg_process = None
+        self._lock = threading.Lock()
+
+    def initialize(self):
+        if self._initialized:
+            return True
+        if not ONVIF_AVAILABLE:
+            print("[ONVIF] onvif-zeep not available.")
+            return False
+
+        try:
+            self.camera = ONVIFCamera(self.ip, self.port, self.user, self.password, self.wsdl_dir)
+            self.media = self.camera.create_media_service()
+
+            profiles = self.media.GetProfiles()
+            if not profiles:
+                print("[ONVIF] No media profiles found.")
+                return False
+            self.profile_token = profiles[0].token
+
+            # Get audio output configuration (if available)
+            try:
+                audio_configs = self.media.GetAudioOutputConfigurations()
+                if audio_configs:
+                    cfg = audio_configs[0]
+                    if hasattr(cfg, 'Codec'):
+                        codec = cfg.Codec.lower()
+                        if 'g711' in codec or 'alaw' in codec:
+                            self.codec = 'pcm_alaw'
+                        elif 'ulaw' in codec:
+                            self.codec = 'pcm_mulaw'
+                    if hasattr(cfg, 'SampleRate'):
+                        self.sample_rate = cfg.SampleRate
+            except:
+                pass  # Some cameras don't expose this; use defaults
+
+            # Determine backchannel URI (common patterns)
+            candidates = [
+                f"rtsp://{self.ip}:{self.port}/onvif/backchannel",
+                f"rtsp://{self.ip}:{self.port}/audio",
+                f"rtsp://{self.ip}:554/backchannel",
+                f"rtsp://{self.user}:{self.password}@{self.ip}:{self.port}/onvif/backchannel",
+            ]
+            self.backchannel_uri = candidates[0]
+            print(f"[ONVIF] Using backchannel URI: {self.backchannel_uri}")
+
+            self._initialized = True
+            return True
+        except Exception as e:
+            print(f"[ONVIF] Initialization error: {e}")
+            return False
+
+    def _generate_tone_pcm(self, frequency=800, duration=5.0):
+        """Generate sine wave as raw 16‑bit PCM (mono, sample_rate)."""
+        sample_rate = self.sample_rate
+        t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+        wave_data = (np.sin(2 * np.pi * frequency * t) * 32767).astype(np.int16)
+        return wave_data.tobytes()
+
+    def _stream_pcm(self, pcm_data, blocking=False):
+        if not self._initialized:
+            if not self.initialize():
+                return False
+
+        self.stop()  # stop any previous stream
+
+        cmd = [
+            "ffmpeg",
+            "-re",
+            "-f", "s16le",
+            "-ar", str(self.sample_rate),
+            "-ac", "1",
+            "-i", "pipe:0",
+            "-acodec", self.codec,
+            "-ar", str(self.sample_rate),
+            "-ac", "1",
+            "-f", "rtsp",
+            self.backchannel_uri
+        ]
+
+        print(f"[ONVIF] Streaming beep (duration {len(pcm_data)//2/self.sample_rate:.1f}s)")
+        try:
+            self._ffmpeg_process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            self._ffmpeg_process.stdin.write(pcm_data)
+            self._ffmpeg_process.stdin.close()
+
+            if blocking:
+                self._ffmpeg_process.wait()
+                self._ffmpeg_process = None
+            else:
+                def wait_and_cleanup():
+                    self._ffmpeg_process.wait()
+                    with self._lock:
+                        self._ffmpeg_process = None
+                threading.Thread(target=wait_and_cleanup, daemon=True).start()
+            return True
+        except Exception as e:
+            print(f"[ONVIF] Streaming error: {e}")
+            self._ffmpeg_process = None
+            return False
+
+    def beep(self, frequency=800, duration=5.0, blocking=False):
+        pcm = self._generate_tone_pcm(frequency, duration)
+        return self._stream_pcm(pcm, blocking)
+
+    def stop(self):
+        with self._lock:
+            if self._ffmpeg_process:
+                self._ffmpeg_process.terminate()
+                self._ffmpeg_process = None
+                print("[ONVIF] Stopped audio stream.")
+
+    @staticmethod
+    def beep_fallback(frequency=800, duration=0.3):
+        """Fallback: play beep on the computer's speaker."""
+        try:
+            import winsound
+            winsound.Beep(frequency, int(duration * 1000))
+        except ImportError:
+            try:
+                import simpleaudio as sa
+                fs = 44100
+                t = np.linspace(0, duration, int(fs * duration))
+                samples = (np.sin(2 * np.pi * frequency * t) * 32767).astype(np.int16)
+                play_obj = sa.play_buffer(samples, 1, 2, fs)
+                play_obj.wait_done()
+            except:
+                print('\a', end='', flush=True)
+# ─── End of ONVIFAudioPlayer ─────────────────────────────────────
+
+# ── Existing imports and setup ──────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from utils import Config
 from utils.config import get_appdata_dir
 from core import FaceDetector, FaceRecognizer
@@ -28,18 +196,20 @@ from services.database_service import DatabaseService
 from services.vector_database import FAISSVectorDB
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 if getattr(sys, 'frozen', False):
     os.chdir(sys._MEIPASS)
 
 print("=" * 60)
-print("LIVE CAMERA + SERVER CLIENT")
+print("LIVE CAMERA + SERVER CLIENT (with ONVIF audio)")
 print("=" * 60)
 
+# ── Load config ──────────────────────────────────────────────────
 config = Config.load("config.yaml")
 recognition_cfg = config.get_section("recognition")
 threshold = recognition_cfg.get("similarity_threshold", 0.45)
 
-# ── PERFORMANCE: Smaller det_size + skip frames ──
+# Performance
 perf_cfg = config.get_section("performance") or {}
 inference_every_n = perf_cfg.get("inference_every_n_frames", 3)
 frame_scale = perf_cfg.get("frame_scale", 0.75)
@@ -47,20 +217,18 @@ frame_scale = perf_cfg.get("frame_scale", 0.75)
 insight_cfg = config.get_section("insightface") or {}
 model_name = "buffalo_l"
 
-# ── SERVER CONFIG ──
+# Server
 server_cfg = config.get_section("server") or {}
 SERVER_URL = server_cfg.get("url", "http://localhost:8000")
 SERVER_TIMEOUT = server_cfg.get("timeout", 10)
 
-# ── DATABASE PATH (APPDATA folder) ──
+# Database
 DB_PATH = os.path.join(get_appdata_dir(), "face_attendance.db")
 
-# ── INITIALIZE DATABASE ──
 engine, SessionLocal = init_database(DB_PATH)
 db_service = DatabaseService(SessionLocal)
 vector_db = FAISSVectorDB(embedding_dim=512)
 
-# ── INITIALIZE AI MODELS ──
 detector = FaceDetector(
     model_name=model_name,
     det_size=(640, 640),
@@ -78,14 +246,34 @@ camera_cfg = config.get_section("camera")
 device_id = camera_cfg.get("source", 0)
 
 print(f"Camera: {device_id} | Model: {model_name} | Threshold: {threshold}")
-print(f"det_size: 640x640 | frame_skip: {inference_every_n} | model: {model_name}")
+print(f"det_size: 640x640 | frame_skip: {inference_every_n}")
 print(f"Server: {SERVER_URL}")
 print(f"DB: Loaded {len(recognizer.database)} embeddings")
 
-# ─────────────────────────────────────────────────────────────
-# THREADING SETUP
-# ─────────────────────────────────────────────────────────────
+# ── ONVIF Audio initialisation ──────────────────────────────────
+audio_player = None
+onvif_cfg = config.get_section("onvif") or {}
+if onvif_cfg.get("enabled", False):
+    try:
+        audio_player = ONVIFAudioPlayer(
+            ip=onvif_cfg.get("ip"),
+            port=onvif_cfg.get("port", 80),
+            user=onvif_cfg.get("username", "admin"),
+            password=onvif_cfg.get("password", "admin"),
+            wsdl_dir=onvif_cfg.get("wsdl_dir", "./wsdl")
+        )
+        if audio_player.initialize():
+            print("[AUDIO] ONVIF audio player ready – 5‑second beep will play through camera speaker.")
+        else:
+            print("[AUDIO] ONVIF init failed – using PC speaker fallback.")
+            audio_player = None
+    except Exception as e:
+        print(f"[AUDIO] ONVIF error: {e} – using PC speaker fallback.")
+        audio_player = None
+else:
+    print("[AUDIO] ONVIF disabled – using PC speaker fallback.")
 
+# ── Threading setup ─────────────────────────────────────────────
 frame_queue = queue.Queue(maxsize=2)
 result_queue = queue.Queue()
 capture_queue = queue.Queue(maxsize=1)
@@ -100,17 +288,17 @@ CAPTURE_KILL = threading.Event()
 last_scan_time = {}
 SCAN_COOLDOWN_SECONDS = 8
 
-# ── PAUSE / RESUME (handled by background thread) ──
 paused = False
 _pause_mutex = threading.Lock()
-cap = None 
-capture_thread = None # Camera handle, release/re-acquire during pause
+cap = None
+capture_thread = None
 
-# ── DB RELOAD SYNC ──
+# ── DB reload ────────────────────────────────────────────────────
 db_lock = threading.Lock()
 last_db_reload = time.time()
-DB_RELOAD_INTERVAL = 60  # seconds
+DB_RELOAD_INTERVAL = 60
 _reload_requested = False
+
 session = requests.Session()
 retry_strategy = Retry(
     total=3,
@@ -126,8 +314,8 @@ no_retry_adapter = HTTPAdapter(max_retries=0)
 no_retry_session.mount("http://", no_retry_adapter)
 no_retry_session.mount("https://", no_retry_adapter)
 
+# ── Pause status worker ─────────────────────────────────────────
 def pause_status_worker():
-    """Background thread: polls server for camera pause state without blocking the main loop."""
     while not CAPTURE_KILL.is_set():
         try:
             resp = no_retry_session.get(f"{SERVER_URL}/camera/status", timeout=2)
@@ -163,7 +351,7 @@ def pause_status_worker():
             pass
         CAPTURE_KILL.wait(3)
 
-
+# ── Camera helpers ──────────────────────────────────────────────
 def release_camera():
     global cap
     if cap is not None and cap.isOpened():
@@ -175,23 +363,19 @@ def reopen_camera():
     global cap
     release_camera()
     time.sleep(0.8)
-    # --- IP CAMERA OPTIMISATION: do not use CAP_DSHOW for network streams ---
     try:
-        # On Windows, CAP_DSHOW may fail for RTSP; fallback to default (FFMPEG)
         new_cap = cv2.VideoCapture(device_id, cv2.CAP_FFMPEG)
     except Exception:
         new_cap = cv2.VideoCapture(device_id)
     new_cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
     new_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
     new_cap.set(cv2.CAP_PROP_FPS, camera_cfg.get("fps", 15))
-    # --- CRITICAL: reduce internal buffer to cut latency ---
     new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     new_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
     new_cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
     if not new_cap.isOpened():
         print(f"[CAMERA] Failed to open camera {device_id}")
         return False
-    # warmup
     for _ in range(5):
         new_cap.read()
     cap = new_cap
@@ -199,7 +383,6 @@ def reopen_camera():
     return True
 
 def capture_worker():
-    """Dedicated capture thread: reads ONVIF/RTSP frames without blocking display."""
     while not CAPTURE_KILL.is_set():
         if cap is None or not cap.isOpened():
             CAPTURE_KILL.wait(0.05)
@@ -223,6 +406,7 @@ def capture_worker():
             except queue.Full:
                 pass
 
+# ── Shutdown handler ─────────────────────────────────────────────
 def shutdown_handler(signum=None, frame=None):
     print("\n[SHUTDOWN] Received signal, cleaning up...")
     global KILL_SIGNAL
@@ -232,8 +416,10 @@ def shutdown_handler(signum=None, frame=None):
         frame_queue.put(KILL_SIGNAL)
         detection_thread.join(timeout=2.0)
         if capture_thread is not None:
-         capture_thread.join(timeout=2.0)
+            capture_thread.join(timeout=2.0)
         release_camera()
+        if audio_player:
+            audio_player.stop()
         cv2.destroyAllWindows()
     print("[SHUTDOWN] Done.")
     sys.exit(0)
@@ -242,6 +428,7 @@ atexit.register(shutdown_handler)
 signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
 
+# ── Server send ──────────────────────────────────────────────────
 def send_known(member_id):
     try:
         resp = no_retry_session.post(
@@ -258,20 +445,17 @@ def send_known(member_id):
         print(f"  [SERVER] Failed: {e}")
     return False
 
-
+# ── DB reload ──────────────────────────────────────────────────
 def reload_database():
-    """Reload DB + vector index + recognizer without restarting the script."""
     global engine, db_service, vector_db, recognizer
     with db_lock:
         print("[DB] Reloading database...")
         try:
             if engine is not None:
                 engine.dispose()
-
             engine, SessionLocal = init_database(DB_PATH)
             db_service = DatabaseService(SessionLocal)
             vector_db = FAISSVectorDB(embedding_dim=512)
-
             recognizer = FaceRecognizer(
                 db_service=db_service,
                 vector_db=vector_db,
@@ -285,9 +469,8 @@ def reload_database():
             traceback.print_exc()
             return False
 
-
+# ── Detection worker ─────────────────────────────────────────────
 def detection_worker():
-    """Background thread: runs AI on frames."""
     while True:
         item = frame_queue.get()
         if item is KILL_SIGNAL:
@@ -305,13 +488,31 @@ def detection_worker():
 
                 result, best_score, all_scores = recognizer.identify(emb, threshold=threshold)
 
-                person_id = result.get("person_id") if result else None 
+                person_id = result.get("person_id") if result else None
                 name = result.get("name") if result else None
                 confidence = result.get("confidence", 0.0) if result else 0.0
-                det["person_id"] = person_id     
+                det["person_id"] = person_id
                 det["name"] = str(name) if name else None
                 det["distance"] = float(best_score) if best_score is not None else 0.0
                 det["confidence"] = float(confidence)
+
+                # ── If recognised, trigger beep and send to server ──
+                if name:
+                    now = time.time()
+                    last_time = last_scan_time.get(person_id, 0)
+                    if now - last_time > SCAN_COOLDOWN_SECONDS:
+                        last_scan_time[person_id] = now
+
+                        # ─── Play 5‑second beep ──────────────────
+                        def play_beep():
+                            if audio_player is not None:
+                                audio_player.beep(frequency=800, duration=5.0, blocking=False)
+                            else:
+                                ONVIFAudioPlayer.beep_fallback(frequency=800, duration=0.3)
+                        threading.Thread(target=play_beep, daemon=True).start()
+
+                        # Send to server
+                        threading.Thread(target=send_known, args=(person_id,), daemon=True).start()
 
         except Exception as e:
             print(f"[WORKER] Error: {e}")
@@ -325,18 +526,14 @@ def detection_worker():
             pass
         frame_queue.task_done()
 
-
+# ── Start threads ──────────────────────────────────────────────
 detection_thread = threading.Thread(target=detection_worker, daemon=True)
 detection_thread.start()
 
 pause_thread = threading.Thread(target=pause_status_worker, daemon=True)
 pause_thread.start()
 
-# ─────────────────────────────────────────────────────────────
-# CAPTURE THREAD
-# ─────────────────────────────────────────────────────────────
-
-# --- IP CAMERA: initialise with low buffering and appropriate backend ---
+# ── Initialise camera ──────────────────────────────────────────
 try:
     cap = cv2.VideoCapture(device_id, cv2.CAP_FFMPEG)
 except Exception:
@@ -344,7 +541,7 @@ except Exception:
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_cfg.get("width", 640))
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_cfg.get("height", 480))
 cap.set(cv2.CAP_PROP_FPS, 15)
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # <--- reduces lag
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
 cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
 
@@ -354,26 +551,22 @@ if not cap or not cap.isOpened():
 
 capture_thread = threading.Thread(target=capture_worker, daemon=True)
 capture_thread.start()
-time.sleep(0.5)  # let capture buffer fill
+time.sleep(0.5)
 
-# ─────────────────────────────────────────────────────────────
-# MAIN LOOP
-# ─────────────────────────────────────────────────────────────
-
+# ── Main loop ──────────────────────────────────────────────────
 print("\nPress 'q' to quit. Press 'r' to reload DB.\n")
 
 frame_count = 0
 last_status = ""
 last_display_time = time.time()
 fps_display = 0
+
 while True:
     frame_count += 1
 
-    # ── CHECK PAUSE STATUS (set by background thread) ──
     with _pause_mutex:
         is_paused = paused
 
-    # ── WHEN PAUSED ──
     if is_paused:
         pause_frame = np.zeros((camera_cfg.get("height", 480), camera_cfg.get("width", 640), 3), dtype=np.uint8)
         cv2.putText(pause_frame, "PAUSED", (200, 240),
@@ -394,7 +587,7 @@ while True:
 
     h, w = frame.shape[:2]
 
-    # ── SUBMIT FULL-RES FRAME to worker ──
+    # Submit frame for detection
     if frame_count % inference_every_n == 0:
         with counter_lock:
             current_fid = frame_counter
@@ -410,7 +603,7 @@ while True:
             except queue.Empty:
                 pass
 
-    # ── COLLECT RESULTS ──
+    # Collect results
     try:
         while True:
             fid, dets = result_queue.get_nowait()
@@ -420,7 +613,7 @@ while True:
     except queue.Empty:
         pass
 
-    # ── DRAW ──
+    # Draw
     display = frame.copy()
 
     with results_lock:
@@ -448,28 +641,14 @@ while True:
             if name:
                 color = (0, 255, 0)
                 label = f"{name} | {distance:.3f}"
-                status = f"MATCH: {name} ({distance:.3f})"
-
-                now = time.time()
-                last_time = last_scan_time.get(person_id, 0)
-                if now - last_time > SCAN_COOLDOWN_SECONDS:
-                    last_scan_time[person_id] = now
-                    threading.Thread(target=send_known, args=(person_id,), daemon=True).start()
-                    label += " [SENT]"
-                else:
-                    label += " [COOLDOWN]"
+                # status is displayed; no extra action needed (beep already sent)
             else:
-                # Unknown face – do NOT send to server, just display
                 color = (0, 165, 255)
                 label = f"? UNKNOWN ({distance:.3f})"
-                status = f"UNKNOWN ({distance:.3f})"
 
             cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
             cv2.putText(display, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            if status != last_status:
-                last_status = status
 
     # FPS
     now = time.time()
@@ -478,7 +657,7 @@ while True:
     cv2.putText(display, f"FPS: {fps_display:.1f} | Frame: {frame_count}",
                 (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-    # ── PERIODIC DB RELOAD (triggered in background thread) ──
+    # Periodic DB reload
     if now - last_db_reload > DB_RELOAD_INTERVAL:
         _reload_requested = True
         last_db_reload = now
@@ -495,5 +674,5 @@ while True:
         print("[DB] Manual reload requested")
         threading.Thread(target=reload_database, daemon=True).start()
 
-# ── SHUTDOWN ──
+# ── Shutdown ──────────────────────────────────────────────────────
 shutdown_handler()

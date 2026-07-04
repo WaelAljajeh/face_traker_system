@@ -16,7 +16,7 @@ faiss_datas, faiss_bins, faiss_hidden = collect_all('faiss')
 # Analysis
 # =========================
 a = Analysis(
-    ['live_zero_drop.py'],               # your camera client script
+    ['live_ip_cam.py'],               # your camera client script
 
     pathex=[],
 
