@@ -26,7 +26,7 @@ insightface:
   model_name: "buffalo_l"
   providers:
     - "CPUExecutionProvider"   # Force CPU (client has no GPU)
-  det_size: [1280, 1280]      # Increased to detect smaller/distant faces
+  det_size: [1280,1280]      # Increased to detect smaller/distant faces
   det_threshold: 0.45         # Lowered to catch more candidates
 
 # ============================================================
@@ -206,3 +206,19 @@ features:
     username: "admin"
     password: "123456"
     wsdl_dir: "./wsdl"
+
+  cameras:
+  - id: "laptop"
+    source: 0             # webcam index
+    width: 640
+    height: 480
+    fps: 5
+    frame_skip: 2
+    detection_scale: 0.5                  # process every 2nd frame (lighter load)
+
+  - id: "ipcam"
+    source: "rtsp://admin:123456@192.168.3.188:554/ch01_sub.264/suptype=0&tcp"
+    width: 1920
+    height: 1080
+    fps: 10
+    frame_skip: 1
