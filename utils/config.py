@@ -52,5 +52,32 @@ class Config:
         """Get entire config section."""
         return self._config.get(section, {})
     
+    def get_mode_params(self, mode: str) -> Dict[str, Any]:
+        """
+        Get resolved parameters for a mode profile.
+        Merges mode-specific overrides on top of base config values.
+        
+        Args:
+            mode: "speed" or "accuracy"
+        
+        Returns:
+            Flat dict with dot-notation keys, e.g. "recognition.similarity_threshold"
+        """
+        mode_profiles = self._config.get("modes", {})
+        profile = mode_profiles.get(mode, {})
+        params = {}
+        for section, values in profile.items():
+            for key, val in values.items():
+                params[f"{section}.{key}"] = val
+        return params
+    
+    def set_mode(self, mode: str):
+        """Set runtime mode in config (does NOT persist to file)."""
+        self._config["mode"] = mode
+    
+    def get_mode(self) -> str:
+        """Get current runtime mode."""
+        return self._config.get("mode", "accuracy")
+    
     def __repr__(self):
         return f"Config({self._config})"

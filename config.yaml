@@ -1,69 +1,52 @@
 # ============================================================
 # PRODUCTION FACE ATTENDANCE SYSTEM - CONFIGURATION
 # ============================================================
-# Complete configuration for all system components
 
-# ============================================================
-# DATABASE CONFIGURATION
-# ============================================================
+# ── Mode toggle ────────────────────────────────────────────
+# "speed"   = fast recognition (1-2 frames), lower threshold, 320x320 det
+# "accuracy" = high precision (3+ frames), higher threshold, 640x640 det
+# Runtime switchable via POST /api/mode (speed|accuracy)
+mode: "accuracy"
+
 database:
-  type: "sqlite"  # Options: "sqlite", "postgresql"
+  type: "sqlite"
   path: "APPDATA/face_attendance.db"
 
-  # PostgreSQL (uncomment for production)
-  # type: "postgresql"
-  # host: "localhost"
-  # port: 5432
-  # database: "face_attendance"
-  # user: "postgres"
-  # password: "${DB_PASSWORD}"
-  # pool_size: 20
-
-# ============================================================
-# INSIGHTFACE CONFIGURATION
-# ============================================================
 insightface:
   model_name: "buffalo_l"
   providers:
-    - "CPUExecutionProvider"   # Force CPU (client has no GPU)
-  det_size: [1280,1280]      # Increased to detect smaller/distant faces
-  det_threshold: 0.45         # Lowered to catch more candidates
+    - "CPUExecutionProvider"
+  # BASE values (used as fallback if mode section doesn't override)
+  det_size: [640, 640]
+  det_threshold: 0.40
+  confidence_threshold: 0.55
 
-# ============================================================
-# CAMERA CONFIGURATION
-# ============================================================
 camera:
-  source: "rtsp://admin:123456@192.168.3.188:554/ch01_sub.264/suptype=0&tcp"
-  width: 1920
-  height: 1080
+  source: 0
+  width: 640
+  height: 480
   fps: 10
-  frame_skip: 1
-  exposure: 0                 # Auto exposure (was -5)
-  brightness: 10              # Slight boost
-  contrast: 10                # Slight boost
+  frame_skip: 2
+  exposure: 0
+  brightness: 10
+  contrast: 10
   reconnect_attempts: 5
   reconnect_delay: 2
 
-# ============================================================
-# FACE QUALITY FILTERING
-# ============================================================
 quality_filter:
   blur_detection: true
-  blur_threshold: 40.0        # More permissive (was 60)
+  blur_threshold: 40.0
   pose_filtering: true
-  max_yaw: 80                 # Wider tolerance (was 70)
-  max_pitch: 60               # Wider tolerance (was 50)
-  max_roll: 60                # Wider tolerance (was 45)
+  max_yaw: 80
+  max_pitch: 60
+  max_roll: 60
   brightness_filtering: true
-  min_brightness: 5           # Allow darker faces (was 10)
-  max_brightness: 245         # Slightly increased
-  min_face_size: 15           # Detect smaller faces (was 20)
+  min_brightness: 5
+  max_brightness: 245
+  min_face_size: 30
   occlusion_filtering: false
   max_occlusion_ratio: 0.20
 
-# ============================================================
-# FACE TRACKING (ByteTrack)
-# ============================================================
 tracking:
   max_age: 30
   min_frames: 3
@@ -72,42 +55,32 @@ tracking:
   embedding_buffer_size: 30
   max_tracks: 100
 
-# ============================================================
-# FACE RECOGNITION
-# ============================================================
 recognition:
   faiss_index_type: "flat"
   faiss_metric: "cosine"
-  similarity_threshold: 0.40      # Lowered from 0.45
-  recognition_threshold: 0.45     # Lowered from 0.50
-  embedding_buffer_per_track: 25  # Increased from 15 for better temporal averaging
+  similarity_threshold: 0.60
+  recognition_threshold: 0.45
+  embedding_buffer_per_track: 25
   temporal_confidence_weight: 0.8
+  # Number of consecutive same-ID frames required before sending scan
+  min_stable_frames: 3
 
-# ============================================================
-# ENROLLMENT & UNKNOWN CANDIDATES
-# ============================================================
 enrollment:
   enabled: true
   unknown_dir: "./unknown_faces"
-  min_quality_for_enrollment: 0.55        # Lowered from 0.70
-  enrollment_threshold: 0.55              # Lowered from 0.65
+  min_quality_for_enrollment: 0.55
+  enrollment_threshold: 0.55
   merge_threshold: 0.75
-  min_samples_for_enrollment: 3           # Reduced from 5
-  min_avg_quality_for_enrollment: 0.65    # Lowered from 0.75
+  min_samples_for_enrollment: 3
+  min_avg_quality_for_enrollment: 0.65
   ignore_expiry_days: 30
 
-# ============================================================
-# ATTENDANCE CONFIGURATION
-# ============================================================
 attendance:
   cooldown_minutes: 240
   mark_checkout_after_minutes: 480
   duplicate_detection_window: 5
   auto_checkout_enabled: false
 
-# ============================================================
-# API SERVER CONFIGURATION
-# ============================================================
 api:
   host: "0.0.0.0"
   port: 8000
@@ -122,9 +95,6 @@ api:
   max_request_size: 52428800
   request_timeout: 30
 
-# ============================================================
-# LOGGING
-# ============================================================
 logging:
   level: "INFO"
   format: "json"
@@ -132,46 +102,34 @@ logging:
   max_size: 10485760
   backup_count: 5
 
-# ============================================================
-# PERFORMANCE OPTIMIZATION
-# ============================================================
 performance:
   use_gpu: false
   gpu_device: 0
   enable_embedding_cache: true
   cache_size: 1000
-  detector_threads: 4          # Increased from 2 (if CPU cores available)
+  detector_threads: 4
   tracker_threads: 1
-  recognition_threads: 4       # Increased from 2
+  recognition_threads: 4
   db_threads: 2
   batch_detection: false
   batch_size: 4
   max_memory_mb: 1024
   garbage_collection_interval: 60
-  inference_every_n_frames: 1  # Process every frame (was 2)
-  frame_scale: 1.0             # Keep full resolution
+  inference_every_n_frames: 1
+  frame_scale: 1.0
 
-# ============================================================
-# SECURITY
-# ============================================================
 security:
   api_key_required: false
   use_https: false
   rate_limit_enabled: false
   requests_per_minute: 100
 
-# ============================================================
-# MONITORING & METRICS
-# ============================================================
 monitoring:
   collect_metrics: true
   metrics_interval: 60
   health_check_interval: 30
   enable_alerts: false
 
-# ============================================================
-# BACKUP & MAINTENANCE
-# ============================================================
 maintenance:
   backup_enabled: true
   backup_interval_hours: 24
@@ -180,9 +138,6 @@ maintenance:
   vacuum_interval_days: 7
   cleanup_old_records_days: 90
 
-# ============================================================
-# FEATURE FLAGS
-# ============================================================
 features:
   passive_enrollment: true
   ignore_system: true
@@ -196,11 +151,8 @@ features:
   unknown_face_color: [0, 165, 255]
   low_quality_color: [0, 0, 255]
 
-  # ============================================================
-  # ONVIF (camera control)
-  # ============================================================
   onvif:
-    enabled: true
+    enabled: false
     ip: "192.168.1.188"
     port: 80
     username: "admin"
@@ -208,17 +160,54 @@ features:
     wsdl_dir: "./wsdl"
 
   cameras:
-  - id: "laptop"
-    source: 0             # webcam index
-    width: 640
-    height: 480
-    fps: 5
-    frame_skip: 2
-    detection_scale: 0.5                  # process every 2nd frame (lighter load)
+    - id: "laptop"
+      source: 0
+      width: 640
+      height: 480
+      fps: 10
+      frame_skip: 2
+      detection_scale: 1.0
 
-  - id: "ipcam"
-    source: "rtsp://admin:123456@192.168.3.188:554/ch01_sub.264/suptype=0&tcp"
-    width: 1920
-    height: 1080
-    fps: 10
-    frame_skip: 1
+# ═══════════════════════════════════════════════════════════
+#  MODE PROFILES — override any base values at runtime
+# ═══════════════════════════════════════════════════════════
+modes:
+  speed:
+    insightface:
+      det_size: [320, 320]
+      det_threshold: 0.35
+    recognition:
+      similarity_threshold: 0.50
+      recognition_threshold: 0.40
+      min_stable_frames: 1
+      temporal_confidence_weight: 0.5
+    quality_filter:
+      blur_threshold: 15.0
+      min_face_size: 20
+      max_yaw: 90
+      max_pitch: 80
+      max_roll: 80
+    tracking:
+      min_frames: 2
+    camera:
+      frame_skip: 1
+
+  accuracy:
+    insightface:
+      det_size: [640, 640]
+      det_threshold: 0.40
+    recognition:
+      similarity_threshold: 0.60
+      recognition_threshold: 0.50
+      min_stable_frames: 3
+      temporal_confidence_weight: 0.8
+    quality_filter:
+      blur_threshold: 40.0
+      min_face_size: 30
+      max_yaw: 60
+      max_pitch: 45
+      max_roll: 45
+    tracking:
+      min_frames: 3
+    camera:
+      frame_skip: 2

@@ -5,6 +5,7 @@ With auto‑reconnect. Uses URLs exactly as provided in config.
 Fixed: Bounding boxes are now correctly aligned regardless of display resize.
        RTSP streams use TCP transport and minimal buffering for low latency.
        Optional per‑camera detection scaling to reduce CPU load.
+FIXED: Pause/resume now works reliably for webcams – added release delay.
 """
 
 import sys
@@ -126,6 +127,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import Config
 from utils.config import get_appdata_dir
 from core import FaceDetector, FaceRecognizer
+from core.quality import QualityFilter
 from models.database import init_database
 from services.database_service import DatabaseService
 from services.vector_database import FAISSVectorDB
@@ -144,6 +146,7 @@ config = Config.load("config.yaml")
 
 recognition_cfg = config.get_section("recognition")
 threshold = recognition_cfg.get("similarity_threshold", 0.45)
+min_stable_frames = recognition_cfg.get("min_stable_frames", 3)
 
 server_cfg = config.get_section("server") or {}
 SERVER_URL = server_cfg.get("url", "http://localhost:8000")
@@ -155,8 +158,20 @@ engine, SessionLocal = init_database(DB_PATH)
 db_service = DatabaseService(SessionLocal)
 vector_db = FAISSVectorDB(embedding_dim=512)
 
-detector = FaceDetector(model_name="buffalo_l", det_size=(640, 640), det_thresh=0.5, confidence_threshold=0.5)
 recognizer = FaceRecognizer(db_service=db_service, vector_db=vector_db, normalize=True)
+
+# Read insightface / detector settings from config
+insight_cfg = config.get_section("insightface") or {}
+det_thresh = insight_cfg.get("det_threshold", 0.40)
+confidence_threshold = insight_cfg.get("confidence_threshold", 0.55)
+det_size = tuple(insight_cfg.get("det_size", [640, 640]))
+detector = FaceDetector(model_name=insight_cfg.get("model_name", "buffalo_l"),
+                        det_size=det_size, det_thresh=det_thresh,
+                        confidence_threshold=confidence_threshold)
+# Separate filter: reject detections below this confidence (higher than det_thresh)
+MIN_DET_CONFIDENCE = confidence_threshold
+
+quality_filter = QualityFilter(config.get_section("quality_filter") or {})
 
 # ── Read camera list ────────────────────────────────────────────
 cameras_config = config.get("cameras")
@@ -216,7 +231,32 @@ camera_data = {}
 CAPTURE_KILL = threading.Event()
 KILL_SIGNAL = None
 last_scan_time = {}
-SCAN_COOLDOWN_SECONDS = 8
+face_track_frames = {}  # person_id -> consecutive frame count (temporal consistency)
+SCAN_COOLDOWN_SECONDS = 5
+
+# ── Mode state (runtime-switchable) ────────────────────────────
+current_mode = "accuracy"
+current_min_stable_frames = min_stable_frames
+current_similarity_threshold = threshold
+current_blur_threshold = float(config.get("quality_filter.blur_threshold", 40.0))
+current_min_face_size = int(config.get("quality_filter.min_face_size", 30))
+current_cooldown = SCAN_COOLDOWN_SECONDS
+_mode_mutex = threading.Lock()
+MODE_POLL_INTERVAL = 3  # seconds
+
+# ── Interactive settings ───────────────────────────────────────
+show_settings_hud = True
+SETTINGS_HELP = [
+    ("H", "Toggle this help"),
+    ("M", "Toggle speed/accuracy mode"),
+    ("[/]", "Threshold -/+ 0.05"),
+    ("{-}", "Min frames -/+ 1"),
+    ("N/M", "Blur threshold -/+ 5"),
+    ("B/V", "Min face size -/+ 5"),
+    ("C/X", "Cooldown -/+ 1s"),
+    ("R", "Reload DB"),
+    ("Q", "Quit"),
+]
 db_lock = threading.Lock()
 last_db_reload = time.time()
 DB_RELOAD_INTERVAL = 60
@@ -234,17 +274,87 @@ no_retry = requests.Session()
 no_retry.mount("http://", HTTPAdapter(max_retries=0))
 no_retry.mount("https://", HTTPAdapter(max_retries=0))
 
+# ── Mode helpers ────────────────────────────────────────────────
+def get_mode_params():
+    """Thread-safe read all current mode params."""
+    with _mode_mutex:
+        return {
+            "min_stable_frames": current_min_stable_frames,
+            "similarity_threshold": current_similarity_threshold,
+            "mode": current_mode,
+            "blur_threshold": current_blur_threshold,
+            "min_face_size": current_min_face_size,
+            "cooldown": current_cooldown,
+        }
+
+def set_mode_params(mode: str, min_frames: int, sim_threshold: float):
+    """Thread-safe write current mode params."""
+    global current_mode, current_min_stable_frames, current_similarity_threshold
+    with _mode_mutex:
+        old_mode = current_mode
+        current_mode = mode
+        current_min_stable_frames = min_frames
+        current_similarity_threshold = sim_threshold
+    print(f"[MODE] {old_mode} → {mode} (frames={min_frames}, threshold={sim_threshold:.2f})")
+
 # ── Server send ─────────────────────────────────────────────────
-def send_known(member_id):
+def send_known(member_id, image_base64=None, phase="confirmed"):
+    """Send known face scan to server with optional image and phase."""
+    payload = {
+        "member_id": str(member_id),
+        "phase": phase,
+    }
+    if image_base64:
+        payload["image_base64"] = image_base64
     try:
-        resp = no_retry.post(f"{SERVER_URL}/scan", json={"member_id": str(member_id)}, timeout=SERVER_TIMEOUT)
+        resp = no_retry.post(f"{SERVER_URL}/scan", json=payload, timeout=SERVER_TIMEOUT)
         if resp.status_code == 200:
-            print(f"  [SERVER] Known scan: {member_id}")
+            print(f"  [SERVER] Known scan: {member_id} (phase={phase})")
             return True
         else:
             print(f"  [SERVER] Error {resp.status_code}: {resp.text}")
     except Exception as e:
         print(f"  [SERVER] Failed: {e}")
+    return False
+
+# ── Face crop to base64 ──────────────────────────────────────────
+def face_to_base64(frame, bbox):
+    """Crop face from frame using bbox [x1,y1,x2,y2] and return base64 jpeg."""
+    import cv2, base64
+    x1, y1, x2, y2 = map(int, bbox)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+    if x2 <= x1 or y2 <= y1:
+        face_crop = frame
+    else:
+        face_crop = frame[y1:y2, x1:x2]
+    if face_crop.size == 0:
+        return None
+    pad_x = int((x2 - x1) * 0.3)
+    pad_y = int((y2 - y1) * 0.3)
+    x1p, y1p = max(0, x1 - pad_x), max(0, y1 - pad_y)
+    x2p, y2p = min(frame.shape[1], x2 + pad_x), min(frame.shape[0], y2 + pad_y)
+    face_crop = frame[y1p:y2p, x1p:x2p]
+    _, buf = cv2.imencode('.jpg', face_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return base64.b64encode(buf).decode('utf-8')
+
+def send_unknown(image_base64, face_quality=None, confidence=None, phase="pending"):
+    """Send unknown face scan to server with image."""
+    try:
+        resp = no_retry.post(f"{SERVER_URL}/scan", json={
+            "member_id": None,
+            "image_base64": image_base64,
+            "confidence": confidence,
+            "face_quality": face_quality or "unknown",
+            "phase": phase,
+        }, timeout=SERVER_TIMEOUT)
+        if resp.status_code == 200:
+            print(f"  [SERVER] Unknown scan sent")
+            return True
+        else:
+            print(f"  [SERVER] Unknown scan error {resp.status_code}")
+    except Exception as e:
+        print(f"  [SERVER] Unknown scan failed: {e}")
     return False
 
 # ── DB reload ─────────────────────────────────────────────────
@@ -321,8 +431,8 @@ def open_camera_with_retry(cam_cfg):
             except:
                 pass
 
-            # Test read
-            for _ in range(3):
+            # Test read – reduce retries to 1 for faster reconnect
+            for _ in range(1):   # was 3, now 1
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     print(f"[CAMERA] Opened successfully: {url} (backend {backend})")
@@ -342,15 +452,24 @@ def capture_worker(cam_id, cap, capture_queue, kill_event, cam_cfg):
             is_paused = paused
         is_webcam = is_webcam_source(cam_cfg["source"])
 
+        # ============================================================
+        # PAUSE: release camera if it's a webcam
+        # ============================================================
         if is_paused and is_webcam:
             if cap is not None:
                 cap.release()
                 cap = None
                 camera_data[cam_id]["cap"] = None
                 print(f"[CAMERA {cam_id}] Released for pause.")
-            kill_event.wait(0.5)
+                # Wait a moment so the OS can free the camera handle
+                time.sleep(0.3)
+            # Sleep a bit to avoid busy loop, but react quickly to resume
+            kill_event.wait(0.1)
             continue
 
+        # ============================================================
+        # RESUME: reconnect if camera is not open
+        # ============================================================
         if cap is None:
             print(f"[CAMERA {cam_id}] (Re)connecting...")
             new_cap = open_camera_with_retry(cam_cfg)
@@ -359,9 +478,11 @@ def capture_worker(cam_id, cap, capture_queue, kill_event, cam_cfg):
                 camera_data[cam_id]["cap"] = cap
                 print(f"[CAMERA {cam_id}] Reconnected.")
             else:
+                # Wait a bit before retrying
                 kill_event.wait(1.0)
                 continue
 
+        # Read frame
         ret, frame = cap.read()
         if not ret:
             print(f"[CAMERA {cam_id}] Read failed, releasing...")
@@ -436,11 +557,26 @@ def detection_worker(cam_id, capture_queue, result_queue, kill_event):
                     det["bbox"] = [x1 / det_scale, y1 / det_scale, x2 / det_scale, y2 / det_scale]
 
             for det in detections:
+                # Layer 1: Detection confidence filter — rejects wall patterns / noise
+                det_conf = float(det.get("confidence", 0.0))
+                if det_conf < MIN_DET_CONFIDENCE:
+                    det["name"] = None
+                    det["quality_pass"] = False
+                    continue
+
+                # Layer 2: Landmark check — real faces have 5 facial landmarks
+                if det.get("landmarks") is None:
+                    det["name"] = None
+                    det["quality_pass"] = False
+                    continue
+
                 emb = det.get("embedding")
                 if emb is None:
                     det["name"] = None
                     continue
-                result, best_score, _ = recognizer.identify(emb, threshold=threshold)
+                mode_params = get_mode_params()
+                current_threshold = mode_params["similarity_threshold"]
+                result, best_score, _ = recognizer.identify(emb, threshold=current_threshold)
                 person_id = result.get("person_id") if result else None
                 name = result.get("name") if result else None
                 det["person_id"] = person_id
@@ -448,20 +584,60 @@ def detection_worker(cam_id, capture_queue, result_queue, kill_event):
                 det["distance"] = float(best_score) if best_score is not None else 0.0
                 det["confidence"] = float(result.get("confidence", 0.0)) if result else 0.0
 
-                if name:
+                # Layer 3: Quality check on original frame
+                with camera_data[cam_id]["frame_lock"]:
+                    orig_frame = camera_data[cam_id].get("latest_frame")
+
+                qc_pass = True
+                if orig_frame is not None:
+                    qc_pass, qc_score, qc_reasons = quality_filter.assess(orig_frame, det)
+                    det["quality_pass"] = qc_pass
+                else:
+                    det["quality_pass"] = True
+
+                # Encode face image once (reused for both known and unknown)
+                face_b64 = None
+                if orig_frame is not None and qc_pass:
+                    face_b64 = face_to_base64(orig_frame, det["bbox"])
+
+                if name and qc_pass:
+                    # Temporal consistency: require N consecutive frames with same ID
+                    face_track_frames[person_id] = face_track_frames.get(person_id, 0) + 1
+                    consecutive = face_track_frames[person_id]
+
+                    mode_params = get_mode_params()
+                    min_stable = mode_params["min_stable_frames"]
+
+                    if consecutive >= min_stable:
+                        now = time.time()
+                        if now - last_scan_time.get(person_id, 0) > SCAN_COOLDOWN_SECONDS:
+                            last_scan_time[person_id] = now
+                            def beep_and_send():
+                                if audio_player:
+                                    audio_player.beep(frequency=800, duration=5.0, blocking=False)
+                                else:
+                                    ONVIFAudioPlayer.beep_fallback()
+                                send_known(person_id, image_base64=face_b64, phase="confirmed")
+                            threading.Thread(target=beep_and_send, daemon=True).start()
+                elif not name and qc_pass:
+                    # Unknown face – send to server for review in Flutter
                     now = time.time()
-                    if now - last_scan_time.get(person_id, 0) > SCAN_COOLDOWN_SECONDS:
-                        last_scan_time[person_id] = now
-                        def beep_and_send():
-                            if audio_player:
-                                audio_player.beep(frequency=800, duration=5.0, blocking=False)
-                            else:
-                                ONVIFAudioPlayer.beep_fallback()
-                            send_known(person_id)
-                        threading.Thread(target=beep_and_send, daemon=True).start()
+                    cam_last = last_scan_time.get(f"unknown_{cam_id}", 0)
+                    if now - cam_last > SCAN_COOLDOWN_SECONDS:
+                        last_scan_time[f"unknown_{cam_id}"] = now
+                        conf = det.get("confidence", 0.0)
+                        def send_unk():
+                            send_unknown(face_b64, confidence=float(conf), phase="pending")
+                        threading.Thread(target=send_unk, daemon=True).start()
         except Exception as e:
             print(f"[WORKER {cam_id}] Error: {e}")
             detections = []
+
+        # Reset consecutive counts for persons NOT seen in this frame
+        seen_persons = {d.get("person_id") for d in detections if d.get("name")}
+        for pid in list(face_track_frames.keys()):
+            if pid is not None and pid not in seen_persons:
+                face_track_frames.pop(pid, None)
 
         try:
             result_queue.put_nowait((time.time(), detections))
@@ -475,17 +651,38 @@ def pause_status_worker():
     while not CAPTURE_KILL.is_set():
         try:
             resp = no_retry.get(f"{SERVER_URL}/camera/status", timeout=2)
-            new_paused = resp.status_code == 200 and resp.json().get("paused", False)
-            with _pause_mutex:
-                if new_paused != paused:
-                    paused = new_paused
-                    if paused:
-                        print("[PAUSE] Paused (webcam will freeze, IP cam keeps running)")
-                    else:
-                        print("[PAUSE] Resumed (webcam continues)")
-        except:
+            if resp.status_code == 200:
+                new_paused = resp.json().get("paused", False)
+                with _pause_mutex:
+                    if new_paused != paused:
+                        paused = new_paused
+                        if paused:
+                            print("[PAUSE] Paused (webcam released)")
+                        else:
+                            print("[PAUSE] Resumed (reconnecting...)")
+        except Exception as e:
+            # If server is unreachable, keep current state
             pass
-        CAPTURE_KILL.wait(3)
+        # Poll every 1 second for fast response
+        CAPTURE_KILL.wait(1)
+
+# ── Mode polling worker ────────────────────────────────────────
+def mode_poll_worker():
+    """Poll server for mode changes at runtime."""
+    while not CAPTURE_KILL.is_set():
+        try:
+            resp = no_retry.get(f"{SERVER_URL}/api/mode", timeout=2)
+            if resp.status_code == 200:
+                data = resp.json()
+                new_mode = data.get("mode", current_mode)
+                params = data.get("params", {})
+                if new_mode != current_mode:
+                    min_frames = int(params.get("recognition.min_stable_frames", current_min_stable_frames))
+                    sim_thresh = float(params.get("recognition.similarity_threshold", current_similarity_threshold))
+                    set_mode_params(new_mode, min_frames, sim_thresh)
+        except Exception:
+            pass
+        CAPTURE_KILL.wait(MODE_POLL_INTERVAL)
 
 # ── Shutdown ────────────────────────────────────────────────────
 def shutdown_handler(signum=None, frame=None):
@@ -559,10 +756,66 @@ if not camera_data:
 pause_thread = threading.Thread(target=pause_status_worker, daemon=True)
 pause_thread.start()
 
+mode_thread = threading.Thread(target=mode_poll_worker, daemon=True)
+mode_thread.start()
+
+# ── Interactive settings helpers ───────────────────────────────
+
+def apply_settings_to_quality_filter():
+    """Push current manual settings to the quality filter."""
+    with _mode_mutex:
+        bt = current_blur_threshold
+        mfs = current_min_face_size
+    quality_filter.apply_mode({
+        "blur_threshold": bt,
+        "min_face_size": mfs,
+    })
+
+def draw_settings_hud(frame, params):
+    """Draw current settings as overlay on the frame."""
+    lines = [
+        f"MODE: {params['mode'].upper()}",
+        f"Threshold: {params['similarity_threshold']:.2f}",
+        f"Min frames: {params['min_stable_frames']}",
+        f"Blur thr: {params['blur_threshold']:.0f}",
+        f"Min face: {params['min_face_size']}px",
+        f"Cooldown: {params['cooldown']}s",
+    ]
+    x, y_start = 10, 60
+    line_h = 18
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x - 4, y_start - 4),
+                  (x + 220, y_start + len(lines) * line_h + 4),
+                  (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    for i, line in enumerate(lines):
+        cv2.putText(frame, line, (x, y_start + i * line_h + 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 255, 255) if i > 0 else (100, 255, 100), 1)
+
+    # Draw help hint at bottom
+    cv2.putText(frame, "H:settings | M:mode | [:thr- ]:thr+ | -:frames- =:frames+ | Q:quit",
+                (10, frame.shape[0] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
+
+
+print("\n══════════════════════════════════════════════════")
+print("  INTERACTIVE SETTINGS")
+print("══════════════════════════════════════════════════")
+print("  H          Toggle settings panel")
+print("  M          Toggle speed / accuracy mode")
+print("  [ / ]     Threshold  - / + 0.05")
+print("  - / =     Min frames - / + 1")
+print("  n / N     Blur thr   - / + 5")
+print("  b / B     Min face   - / + 5px")
+print("  c / C     Cooldown   - / + 1s")
+print("  R          Reload database")
+print("  Q          Quit")
+print("══════════════════════════════════════════════════\n")
+
 # ═══════════════════════════════════════════════════════════════
 # MAIN DISPLAY LOOP — UI STARTS IMMEDIATELY, NEVER BLOCKS
 # ═══════════════════════════════════════════════════════════════
-print("\nPress 'q' to quit. Press 'r' to reload DB.\n")
 
 cv2.namedWindow("Live Cameras", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Live Cameras", 1280, 480)
@@ -691,6 +944,11 @@ while True:
     cv2.putText(display, f"FPS: {fps:.1f} | Frame: {frame_count}", (20, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
+    # Draw settings HUD overlay
+    if show_settings_hud:
+        p = get_mode_params()
+        draw_settings_hud(display, p)
+
     cv2.imshow("Live Cameras", display)
 
     # Auto DB reload
@@ -701,11 +959,123 @@ while True:
         _reload_requested = False
         threading.Thread(target=reload_database, daemon=True).start()
 
+    # ── Interactive keyboard controls ──
     key = cv2.waitKey(10) & 0xFF
     if key == ord("q"):
         break
     elif key == ord("r"):
         print("[DB] Manual reload requested")
         threading.Thread(target=reload_database, daemon=True).start()
+
+    elif key == ord("h"):
+        show_settings_hud = not show_settings_hud
+        print(f"[SETTINGS] HUD {'ON' if show_settings_hud else 'OFF'}")
+
+    elif key == ord("m"):
+        with _mode_mutex:
+            new_mode = "speed" if current_mode == "accuracy" else "accuracy"
+        # Fetch mode params from server
+        try:
+            resp = no_retry.get(f"{SERVER_URL}/api/mode", timeout=2)
+            if resp.status_code == 200:
+                data = resp.json()
+                svr_mode = data.get("mode", new_mode)
+                params = data.get("params", {})
+                if svr_mode != new_mode:
+                    # Server hasn't been told — set it
+                    no_retry.post(f"{SERVER_URL}/api/mode",
+                                  data={"mode": new_mode}, timeout=2)
+                    resp2 = no_retry.get(f"{SERVER_URL}/api/mode", timeout=2)
+                    if resp2.status_code == 200:
+                        params = resp2.json().get("params", {})
+                min_f = int(params.get("recognition.min_stable_frames", current_min_stable_frames))
+                sim_t = float(params.get("recognition.similarity_threshold", current_similarity_threshold))
+                set_mode_params(svr_mode, min_f, sim_t)
+        except Exception as e:
+            print(f"[SETTINGS] Failed to sync mode with server: {e}")
+            # Fall back to local config
+            import yaml
+            with open("config.yaml", "r") as f:
+                cfg = yaml.safe_load(f)
+            profiles = cfg.get("modes", {})
+            profile = profiles.get(new_mode, {})
+            rec_cfg = profile.get("recognition", {})
+            qf_cfg = profile.get("quality_filter", {})
+            min_f = int(rec_cfg.get("min_stable_frames", current_min_stable_frames))
+            sim_t = float(rec_cfg.get("similarity_threshold", current_similarity_threshold))
+            bt = float(qf_cfg.get("blur_threshold", current_blur_threshold))
+            mfs = int(qf_cfg.get("min_face_size", current_min_face_size))
+            with _mode_mutex:
+                current_mode = new_mode
+                current_min_stable_frames = min_f
+                current_similarity_threshold = sim_t
+                current_blur_threshold = bt
+                current_min_face_size = mfs
+            apply_settings_to_quality_filter()
+            print(f"[SETTINGS] Local mode → {new_mode}")
+
+    elif key == ord("["):  # Threshold -0.05
+        with _mode_mutex:
+            current_similarity_threshold = max(0.10, current_similarity_threshold - 0.05)
+            t = current_similarity_threshold
+        print(f"[SETTINGS] Threshold = {t:.2f}")
+
+    elif key == ord("]"):  # Threshold +0.05
+        with _mode_mutex:
+            current_similarity_threshold = min(0.95, current_similarity_threshold + 0.05)
+            t = current_similarity_threshold
+        print(f"[SETTINGS] Threshold = {t:.2f}")
+
+    elif key == ord("-"):  # Min frames -1
+        with _mode_mutex:
+            current_min_stable_frames = max(1, current_min_stable_frames - 1)
+            f = current_min_stable_frames
+        print(f"[SETTINGS] Min stable frames = {f}")
+
+    elif key == ord("="):  # Min frames +1
+        with _mode_mutex:
+            current_min_stable_frames = min(10, current_min_stable_frames + 1)
+            f = current_min_stable_frames
+        print(f"[SETTINGS] Min stable frames = {f}")
+
+    elif key == ord("n"):  # Blur threshold -5
+        with _mode_mutex:
+            current_blur_threshold = max(5.0, current_blur_threshold - 5.0)
+            bt = current_blur_threshold
+        apply_settings_to_quality_filter()
+        print(f"[SETTINGS] Blur threshold = {bt:.0f}")
+
+    elif key == ord("N"):  # Blur threshold +5 (shift+N = Unicode 78)
+        with _mode_mutex:
+            current_blur_threshold = min(200.0, current_blur_threshold + 5.0)
+            bt = current_blur_threshold
+        apply_settings_to_quality_filter()
+        print(f"[SETTINGS] Blur threshold = {bt:.0f}")
+
+    elif key == ord("b"):  # Min face size -5
+        with _mode_mutex:
+            current_min_face_size = max(10, current_min_face_size - 5)
+            mfs = current_min_face_size
+        apply_settings_to_quality_filter()
+        print(f"[SETTINGS] Min face size = {mfs}px")
+
+    elif key == ord("B"):  # Min face size +5 (shift+B = Unicode 66)
+        with _mode_mutex:
+            current_min_face_size = min(200, current_min_face_size + 5)
+            mfs = current_min_face_size
+        apply_settings_to_quality_filter()
+        print(f"[SETTINGS] Min face size = {mfs}px")
+
+    elif key == ord("c"):  # Cooldown -1s
+        with _mode_mutex:
+            current_cooldown = max(0, current_cooldown - 1)
+        SCAN_COOLDOWN_SECONDS = current_cooldown
+        print(f"[SETTINGS] Cooldown = {SCAN_COOLDOWN_SECONDS}s")
+
+    elif key == ord("C"):  # Cooldown +1s (shift+C = Unicode 67)
+        with _mode_mutex:
+            current_cooldown = min(30, current_cooldown + 1)
+        SCAN_COOLDOWN_SECONDS = current_cooldown
+        print(f"[SETTINGS] Cooldown = {SCAN_COOLDOWN_SECONDS}s")
 
 shutdown_handler()

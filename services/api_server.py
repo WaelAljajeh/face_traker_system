@@ -2,6 +2,7 @@
 # API SERVER (ONLY ROUTES + DEPENDENCY INJECTION)
 # ============================================================
 
+import os
 import logging
 import uuid
 import base64
@@ -12,9 +13,11 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from services.websocket_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ class ScanRequest(BaseModel):
     image_base64: Optional[str] = None
     confidence: Optional[float] = None
     face_quality: Optional[str] = None
+    phase: Optional[str] = "confirmed"  # "pending" or "confirmed"
 
 
 class AckRequest(BaseModel):
@@ -66,6 +70,8 @@ class AttendanceAPIServer:
         enrollment_service=None,
         vector_db=None,
         db_service=None,
+        quality_filter=None,
+        mode_change_callback=None,
     ):
         self.config = config
         self.embedders = embedders
@@ -76,8 +82,13 @@ class AttendanceAPIServer:
         self.enrollment_service = enrollment_service
         self.vector_db = vector_db
         self.db_service = db_service
+        self.quality_filter = quality_filter
+        self.mode_change_callback = mode_change_callback
 
         self.camera_paused = threading.Event()
+        self.ws_manager = WebSocketManager()
+        self.current_mode = config.get("mode", "accuracy") if hasattr(config, 'get') else "accuracy"
+        self.mode_config = config
         self.app = FastAPI(title="Face Attendance API", version="1.0.0")
 
         self.app.add_middleware(
@@ -87,6 +98,10 @@ class AttendanceAPIServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        import os
+        self.scan_images_dir = "scan_images"
+        os.makedirs(self.scan_images_dir, exist_ok=True)
 
         self._setup_routes()
         self._start_cleanup_task()
@@ -100,6 +115,9 @@ class AttendanceAPIServer:
         recognizer = self.recognizer
         vector_db = self.vector_db
         embedders = self.embedders
+
+        from fastapi.staticfiles import StaticFiles
+        self.app.mount("/images", StaticFiles(directory=self.scan_images_dir), name="images")
 
         # ================= HEALTH =================
         @self.app.get("/health")
@@ -299,27 +317,57 @@ class AttendanceAPIServer:
             try:
                 scan_id = str(uuid.uuid4())
                 timestamp = time.time()
+                image_url = None
                 
-                # Store scan 
-                # event
+                # Save image to disk if present
+                if request.image_base64:
+                    try:
+                        import base64 as b64
+                        img_data = request.image_base64
+                        if "," in img_data:
+                            img_data = img_data.split(",")[1]
+                        img_bytes = b64.b64decode(img_data)
+                        filename = f"scan_{scan_id}.jpg"
+                        filepath = os.path.join(self.scan_images_dir, filename)
+                        with open(filepath, "wb") as f:
+                            f.write(img_bytes)
+                        image_url = f"/images/{filename}"
+                    except Exception as e:
+                        logger.warning(f"Failed to save scan image: {e}")
+                
                 success = db.add_scan(
                     scan_id=scan_id,
                     member_id=request.member_id,
                     timestamp=timestamp,
                     image_base64=request.image_base64,
+                    image_url=image_url,
                     confidence=request.confidence,
                     face_quality=request.face_quality,
                 )
                 
                 if not success:
                     raise HTTPException(500, "Failed to store scan")
+
+                # Broadcast scan event to all connected WebSocket clients
+                scan_event = {
+                    "id": scan_id,
+                    "member_id": request.member_id,
+                    "timestamp": timestamp,
+                    "image_base64": request.image_base64,
+                    "image_url": image_url,
+                    "confidence": request.confidence,
+                    "face_quality": request.face_quality,
+                    "phase": request.phase or "confirmed",
+                }
+                await self.ws_manager.broadcast_scan(scan_event)
                 
                 logger.info(f"🔥 Scan received: {scan_id} | member={request.member_id}")
                 
                 return {
                     "success": True,
                     "scan_id": scan_id,
-                    "timestamp": timestamp
+                    "timestamp": timestamp,
+                    "image_url": image_url,
                 }
             
             except HTTPException:
@@ -502,6 +550,66 @@ class AttendanceAPIServer:
                 "scan_id": scan_id,
                 "success": success
             }
+
+        # ================= WEBSOCKET (Real-time scan push) =================
+        @self.app.websocket("/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            await self.ws_manager.connect(websocket)
+            try:
+                # Send current mode on connect
+                await websocket.send_json({
+                    "type": "hello",
+                    "mode": self.current_mode,
+                    "timestamp": time.time(),
+                })
+                # Keep connection alive — listen for client pings
+                while True:
+                    data = await websocket.receive_text()
+                    try:
+                        msg = json.loads(data)
+                        if msg.get("type") == "ping":
+                            await websocket.send_json({"type": "pong"})
+                    except json.JSONDecodeError:
+                        pass
+            except WebSocketDisconnect:
+                pass
+            except Exception as e:
+                logger.warning(f"[WS] Error: {e}")
+            finally:
+                await self.ws_manager.disconnect(websocket)
+
+        # ================= MODE SWITCHING (Runtime toggle) =================
+        @self.app.get("/api/mode")
+        async def get_mode():
+            """Get current recognition mode and effective params."""
+            params = self._resolve_mode_params()
+            return {
+                "mode": self.current_mode,
+                "available": ["speed", "accuracy"],
+                "params": {
+                    "recognition.similarity_threshold": params.get("recognition.similarity_threshold", 0.6),
+                    "recognition.min_stable_frames": int(params.get("recognition.min_stable_frames", 3)),
+                    "recognition.recognition_threshold": params.get("recognition.recognition_threshold", 0.5),
+                    "quality_filter.blur_threshold": params.get("quality_filter.blur_threshold", 40.0),
+                    "quality_filter.min_face_size": int(params.get("quality_filter.min_face_size", 30)),
+                },
+            }
+
+        @self.app.post("/api/mode")
+        async def set_mode(mode: str = Form(...)):
+            """Switch recognition mode at runtime: 'speed' or 'accuracy'."""
+            try:
+                changed = self.apply_mode(mode)
+                # Broadcast mode change to all WebSocket clients
+                await self.ws_manager.broadcast_mode_change(mode)
+                return {
+                    "success": True,
+                    "mode": mode,
+                    "changed": list(changed.keys()),
+                }
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+
         @self.app.post("/camera/pause")
         async def pause_camera():
             """Tell Python to release the camera and pause recognition."""
@@ -517,6 +625,71 @@ class AttendanceAPIServer:
         async def camera_status():
             """Get current camera pause status."""
             return {"paused": self.camera_paused.is_set()}
+
+    # ========================================================
+    # MODE MANAGEMENT
+    # ========================================================
+    def _resolve_mode_params(self, mode: str = None):
+        """Resolve effective params for given mode. Returns (section_key, params_dict)."""
+        mode = mode or self.current_mode
+        mode_profiles = {}
+        if hasattr(self.config, 'get_section'):
+            mode_profiles = self.config.get_section("modes")
+        elif isinstance(self.config, dict):
+            mode_profiles = self.config.get("modes", {})
+
+        profile = mode_profiles.get(mode, {})
+        flat = {}
+        for section, values in profile.items():
+            for key, val in values.items():
+                flat[f"{section}.{key}"] = val
+        return flat
+
+    def apply_mode(self, mode: str):
+        """Apply mode profile at runtime. Returns dict of changed params."""
+        if mode not in ("speed", "accuracy"):
+            raise ValueError(f"Invalid mode: {mode}. Use 'speed' or 'accuracy'.")
+
+        old_mode = self.current_mode
+        self.current_mode = mode
+        params = self._resolve_mode_params(mode)
+
+        changed = {}
+        if self.recognizer:
+            new_sim = params.get("recognition.similarity_threshold")
+            if new_sim is not None:
+                changed["recognition.similarity_threshold"] = self.recognizer.similarity_threshold
+                self.recognizer.similarity_threshold = new_sim
+
+            new_min_frames = params.get("recognition.min_stable_frames")
+            if new_min_frames is not None:
+                changed["recognition.min_stable_frames"] = self.recognizer.min_stable_frames
+                self.recognizer.min_stable_frames = int(new_min_frames)
+
+            new_rec_thresh = params.get("recognition.recognition_threshold")
+            if new_rec_thresh is not None:
+                changed["recognition.recognition_threshold"] = self.recognizer.recognition_threshold
+                self.recognizer.recognition_threshold = new_rec_thresh
+
+        if self.quality_filter:
+            qf_params = {}
+            for k in ("blur_threshold", "min_face_size", "max_yaw", "max_pitch", "max_roll"):
+                kval = f"quality_filter.{k}"
+                if kval in params:
+                    qf_params[k] = params[kval]
+            if qf_params:
+                changed["quality_filter"] = qf_params
+                self.quality_filter.apply_mode(qf_params)
+
+        # Notify mode change callback (live_ip_cam uses this)
+        if self.mode_change_callback:
+            try:
+                self.mode_change_callback(mode, params)
+            except Exception as e:
+                logger.error(f"[MODE] Callback error: {e}")
+
+        logger.info(f"[MODE] Switched: {old_mode} → {mode}. Changed: {list(changed.keys())}")
+        return changed
 
     # ========================================================
     # BACKGROUND CLEANUP TASK
@@ -537,9 +710,9 @@ class AttendanceAPIServer:
         thread = threading.Thread(target=cleanup_loop, daemon=True)
         thread.start()
      
-
-
-
+    
+    
+    
     # ========================================================
     # RUN SERVER
     # ========================================================

@@ -480,7 +480,8 @@ class DatabaseService:
     
     def add_scan(self, scan_id: str, member_id: Optional[int], timestamp: float,
                  image_base64: str = None, recognized: bool = False,
-                 confidence: float = None, face_quality: str = None) -> bool:
+                 confidence: float = None, face_quality: str = None,
+                 image_url: str = None) -> bool:
         """Add a pending scan from backend camera."""
         try:
             from models.database import PendingScan
@@ -491,6 +492,7 @@ class DatabaseService:
                 member_id=member_id,
                 timestamp=timestamp,
                 image_base64=image_base64,
+                image_url=image_url,
                 recognized=recognized,
                 confidence=confidence,
                 face_quality=face_quality,
@@ -526,6 +528,7 @@ class DatabaseService:
                     'member_id': r.member_id,
                     'timestamp': r.timestamp,
                     'image_base64': r.image_base64,
+                    'image_url': r.image_url,
                     'recognized': r.recognized,
                     'confidence': r.confidence,
                     'face_quality': r.face_quality,
